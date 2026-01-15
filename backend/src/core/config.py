@@ -1,10 +1,32 @@
 """
 Configuration management using Pydantic Settings.
 """
+import os
+from pathlib import Path
 from typing import List, Optional
 from urllib.parse import quote_plus
 from pydantic import Field, PostgresDsn, RedisDsn, field_validator
 from pydantic_settings import BaseSettings, SettingsConfigDict
+
+# CRITICAL: Set LangSmith environment variables BEFORE any LangChain imports
+# Read .env file directly to get values before Pydantic Settings loads them
+_env_file = Path(__file__).parent.parent.parent / ".env"
+if _env_file.exists():
+    with open(_env_file, "r") as f:
+        for line in f:
+            line = line.strip()
+            if line and not line.startswith("#") and "=" in line:
+                key, value = line.split("=", 1)
+                key = key.strip()
+                value = value.strip().strip('"').strip("'")
+                # Only set LangSmith-related vars if not already set
+                if key.startswith("LANGCHAIN_") or key.startswith("LANGSMITH_"):
+                    if key not in os.environ:
+                        os.environ[key] = value
+
+# Ensure LANGCHAIN_TRACING_V2 is set correctly
+if os.getenv("LANGCHAIN_TRACING_V2", "").lower() in ("true", "1"):
+    os.environ["LANGCHAIN_TRACING_V2"] = "true"
 
 
 class Settings(BaseSettings):
@@ -33,12 +55,13 @@ class Settings(BaseSettings):
 
     # LLM Provider - Anthropic
     anthropic_api_key: Optional[str] = Field(default=None, description="Anthropic API key")
-    anthropic_model: str = Field(default="claude-3-opus-20240229", description="Anthropic model")
+    anthropic_model: str = Field(default="claude-3-haiku-20240307", description="Anthropic model - Claude 3 Haiku (cheapest)")
 
     # LangSmith
     langchain_tracing_v2: bool = Field(default=False, description="Enable LangSmith tracing")
     langchain_api_key: Optional[str] = Field(default=None, description="LangSmith API key")
     langchain_project: str = Field(default="dv360-agent-system", description="LangSmith project name")
+    langsmith_endpoint: Optional[str] = Field(default="https://api.smith.langchain.com", description="LangSmith API endpoint")
 
     # PostgreSQL
     postgres_host: str = Field(default="145.223.88.120", description="PostgreSQL host")

@@ -10,6 +10,10 @@ from langgraph.graph import StateGraph, END
 
 from .base import BaseAgent, BaseAgentState
 from .performance_agent import performance_agent
+from .performance_agent_langgraph import performance_agent_langgraph  # New LangGraph version
+from .budget_risk_agent import budget_risk_agent
+from .audience_agent import audience_targeting_agent
+from .creative_agent import creative_inventory_agent
 from ..tools.memory_tool import memory_retrieval_tool
 from ..memory.session_manager import session_manager
 from ..tools.decision_logger import decision_logger
@@ -52,14 +56,25 @@ class ChatConductor(BaseAgent):
         # Registry of available specialist agents
         self.specialist_agents = {
             "performance_diagnosis": {
-                "agent": performance_agent,
+                "agent": performance_agent_langgraph,  # Using new LangGraph version!
                 "description": "Analyzes campaign performance, identifies issues, provides optimization recommendations",
                 "keywords": ["performance", "campaign", "metrics", "ctr", "roas", "conversions", "optimize"],
             },
-            # Future agents will be added here:
-            # "budget_pacing": {...},
-            # "audience_targeting": {...},
-            # "creative_inventory": {...},
+            "budget_risk": {
+                "agent": budget_risk_agent,
+                "description": "Analyzes budget utilization, pacing, and risk assessment, provides spend optimization and risk mitigation recommendations",
+                "keywords": ["budget", "pacing", "spend", "allocation", "forecast", "over-pacing", "under-pacing", "risk", "depletion"],
+            },
+            "audience_targeting": {
+                "agent": audience_targeting_agent,
+                "description": "Analyzes audience segment performance, provides targeting optimization recommendations",
+                "keywords": ["audience", "targeting", "segment", "demographic", "lookalike", "remarketing"],
+            },
+            "creative_inventory": {
+                "agent": creative_inventory_agent,
+                "description": "Analyzes creative performance, detects fatigue, provides creative refresh recommendations",
+                "keywords": ["creative", "ad", "banner", "video", "asset", "design", "fatigue", "refresh"],
+            },
         }
 
     def get_system_prompt(self) -> str:
@@ -94,9 +109,9 @@ Response Style:
 
 When routing:
 - Performance questions → performance_diagnosis agent
-- Budget/pacing questions → budget_pacing agent (future)
-- Audience questions → audience_targeting agent (future)
-- Creative questions → creative_inventory agent (future)
+- Budget/pacing/risk questions → budget_risk agent
+- Audience questions → audience_targeting agent
+- Creative questions → creative_inventory agent
 
 If unsure, default to the most relevant agent or ask clarifying questions."""
 
@@ -260,7 +275,7 @@ If unsure, default to the most relevant agent or ask clarifying questions."""
 
     def _route_to_agents(self, query: str, session_memory: Optional[Any]) -> List[str]:
         """
-        Determine which agent(s) to route the query to.
+        Determine which agent(s) to route the query to using LLM.
 
         Args:
             query: User query
@@ -269,21 +284,80 @@ If unsure, default to the most relevant agent or ask clarifying questions."""
         Returns:
             List of agent names to invoke
         """
-        query_lower = query.lower()
-        selected = []
-
-        # Check each agent's keywords
+        # Build agent descriptions for the LLM
+        agent_list = []
         for agent_name, info in self.specialist_agents.items():
-            keywords = info.get("keywords", [])
-            if any(keyword in query_lower for keyword in keywords):
-                selected.append(agent_name)
+            agent_list.append(f"- {agent_name}: {info['description']}")
 
-        # Default to performance agent if no match
-        if not selected:
-            logger.info("No specific agent matched, defaulting to performance_diagnosis")
-            selected.append("performance_diagnosis")
+        agents_description = "\n".join(agent_list)
 
-        return selected
+        # Build routing prompt
+        routing_prompt = f"""You are a routing assistant. Based on the user's query, decide which specialist agent(s) should handle it.
+
+Available agents:
+{agents_description}
+
+User query: "{query}"
+
+Instructions:
+- Respond with ONLY the agent name(s), one per line
+- You can select multiple agents if the query needs multiple perspectives
+- Valid agent names: {', '.join(self.specialist_agents.keys())}
+- If unsure, default to: performance_diagnosis
+
+Your response (agent names only):"""
+
+        try:
+            # Call LLM for routing decision
+            from langchain_core.messages import SystemMessage, HumanMessage
+
+            messages = [
+                SystemMessage(content="You are a routing assistant that selects which specialist agents should handle user queries."),
+                HumanMessage(content=routing_prompt)
+            ]
+
+            response = self.llm.invoke(messages)
+            response_text = response.content.strip()
+
+            # Parse agent names from response
+            selected = []
+            for line in response_text.split('\n'):
+                line = line.strip().lower().replace('-', '_')
+                # Remove any markdown or formatting
+                line = line.strip('*-• ').strip()
+                if line in self.specialist_agents:
+                    selected.append(line)
+
+            logger.info(
+                "LLM routing decision",
+                query=query[:50],
+                selected_agents=selected,
+                llm_response=response_text[:100]
+            )
+
+            # Default to performance agent if nothing selected
+            if not selected:
+                logger.info("LLM returned no valid agents, defaulting to performance_diagnosis")
+                selected.append("performance_diagnosis")
+
+            return selected
+
+        except Exception as e:
+            logger.error("LLM routing failed, falling back to keyword matching", error_message=str(e))
+
+            # Fallback to keyword matching
+            query_lower = query.lower()
+            selected = []
+
+            for agent_name, info in self.specialist_agents.items():
+                keywords = info.get("keywords", [])
+                if any(keyword in query_lower for keyword in keywords):
+                    selected.append(agent_name)
+
+            if not selected:
+                selected.append("performance_diagnosis")
+
+            return selected
 
     def _synthesize_responses(
         self,

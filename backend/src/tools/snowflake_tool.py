@@ -87,6 +87,9 @@ class SnowflakeTool:
 
     def _execute_query_sync(self, query: str) -> List[Dict[str, Any]]:
         """Execute query synchronously."""
+        from datetime import date, datetime
+        from decimal import Decimal
+        
         conn = None
         try:
             conn = self._get_connection()
@@ -95,8 +98,21 @@ class SnowflakeTool:
             results = cursor.fetchall()
             cursor.close()
 
+            # Convert date/datetime/Decimal objects to JSON-serializable types
+            serializable_results = []
+            for row in results:
+                serializable_row = {}
+                for key, value in row.items():
+                    if isinstance(value, (date, datetime)):
+                        serializable_row[key] = value.isoformat()
+                    elif isinstance(value, Decimal):
+                        # Convert Decimal to float for JSON serialization
+                        serializable_row[key] = float(value)
+                    else:
+                        serializable_row[key] = value
+                serializable_results.append(serializable_row)
 
-            return results
+            return serializable_results
         finally:
             if conn:
                 conn.close()
@@ -198,39 +214,82 @@ class SnowflakeTool:
         if insertion_order:
             query_parts.append(f"AND insertion_order = '{insertion_order}'")
         if advertiser:
-            query_parts.append(f"AND advertiser_id = '{advertiser}'")
+            query_parts.append(f"AND advertiser = '{advertiser}'")
         if start_date:
             query_parts.append(f"AND date >= '{start_date}'")
         if end_date:
             query_parts.append(f"AND date <= '{end_date}'")
 
-        query_parts.append(f"ORDER BY date DESC LIMIT {limit}")
+        query_parts.append(f"group by 1,2,3 ORDER BY date DESC LIMIT {limit}")
 
         query = "\n".join(query_parts)
         return await self.execute_query(query)
 
     async def get_budget_pacing(
         self,
-        campaign_id: str,
-        period_days: int = 30
-    ) -> Dict[str, Any]:
+        insertion_order_id: Optional[str] = None,
+        io_name: Optional[str] = None,
+        start_date: Optional[str] = None,
+        end_date: Optional[str] = None
+    ) -> List[Dict[str, Any]]:
         """
-        Get budget pacing analysis for a campaign.
+        Get budget pacing analysis for Quiz advertiser budgets.
+        
+        IMPORTANT CONTEXT:
+        - All budgets are for advertiser 'Quiz' only
+        - Budgets are at MONTHLY level (each row represents a monthly budget segment)
+        - Table: reports.multi_agent.DV360_BUDGETS_QUIZ
+        
+        Available columns:
+        - INSERTION_ORDER_ID: The insertion order ID
+        - IO_NAME: Insertion order name
+        - IO_STATUS: Status of the insertion order
+        - SEGMENT_NUMBER: Monthly segment number
+        - BUDGET_AMOUNT: Total budget for this monthly segment
+        - SEGMENT_START_DATE: Start date of the monthly segment
+        - SEGMENT_END_DATE: End date of the monthly segment
+        - DAYS_IN_SEGMENT: Number of days in the segment
+        - AVG_DAILY_BUDGET: Average daily budget for the segment
+        - SEGMENT_STATUS: Status of the budget segment
 
         Args:
-            campaign_id: Campaign ID
-            period_days: Number of days to analyze
+            insertion_order_id: Optional insertion order ID filter
+            io_name: Optional insertion order name filter (supports partial match)
+            start_date: Optional start date filter (YYYY-MM-DD) - filters by SEGMENT_START_DATE
+            end_date: Optional end date filter (YYYY-MM-DD) - filters by SEGMENT_END_DATE
 
         Returns:
-            Budget pacing metrics
+            List of budget pacing records (monthly segments)
         """
-        query = f"""
-            select *
-            from reports.multi_agent.DV360_BUDGETS_QUIZ
-        """
-
-        results = await self.execute_query(query)
-        return results[0] if results else {}
+        query_parts = ["""
+            SELECT 
+                INSERTION_ORDER_ID,
+                IO_NAME,
+                IO_STATUS,
+                SEGMENT_NUMBER,
+                BUDGET_AMOUNT,
+                SEGMENT_START_DATE,
+                SEGMENT_END_DATE,
+                DAYS_IN_SEGMENT,
+                AVG_DAILY_BUDGET,
+                SEGMENT_STATUS
+            FROM reports.multi_agent.DV360_BUDGETS_QUIZ
+            WHERE 1=1
+        """]
+        
+        if insertion_order_id:
+            query_parts.append(f"AND INSERTION_ORDER_ID = '{insertion_order_id}'")
+        if io_name:
+            query_parts.append(f"AND IO_NAME LIKE '%{io_name}%'")
+        if start_date:
+            query_parts.append(f"AND SEGMENT_START_DATE >= '{start_date}'")
+        if end_date:
+            query_parts.append(f"AND SEGMENT_END_DATE <= '{end_date}'")
+        
+        query_parts.append("ORDER BY SEGMENT_START_DATE DESC")
+        
+        query = "\n".join(query_parts)
+        return await self.execute_query(query)
 
     async def get_audience_performance(
         self,
@@ -265,11 +324,6 @@ class SnowflakeTool:
             from reports.reporting_revamp.ALL_PERFORMANCE_AGG
             where advertiser = 'Quiz'
         """]
-
-        if start_date:
-            query_parts.append(f"AND date >= '{start_date}'")
-        if end_date:
-            query_parts.append(f"AND date <= '{end_date}'")
 
         if start_date:
             query_parts.append(f"AND date >= '{start_date}'")
@@ -327,25 +381,6 @@ class SnowflakeTool:
 
         query = "\n".join(query_parts)
         return await self.execute_query(query)
-
-    def to_langchain_tool(self):
-        """Convert to LangChain tool for agent use."""
-        @tool
-        async def query_dv360_data(query: str) -> str:
-            """
-            Query DV360 data from Snowflake.
-
-            Args:
-                query: SQL query to execute
-
-            Returns:
-                JSON string of results
-            """
-            import json
-            results = await self.execute_query(query)
-            return json.dumps(results, default=str)
-
-        return query_dv360_data
 
 
 # Global instance

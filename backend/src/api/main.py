@@ -1,6 +1,7 @@
 """
 FastAPI application entrypoint.
 """
+import os
 import uuid
 from contextlib import asynccontextmanager
 from fastapi import FastAPI, Request, Response
@@ -10,6 +11,10 @@ from prometheus_client import make_asgi_app
 import time
 
 from ..core.config import settings
+
+# Note: LangSmith environment variables are now set in config.py
+# before any LangChain imports happen, ensuring tracing works correctly
+
 from ..core.database import init_db, close_db, ensure_pgvector_extension
 from ..core.cache import init_redis, close_redis
 from ..core.telemetry import (
@@ -30,6 +35,17 @@ async def lifespan(app: FastAPI):
     logger.info("Starting DV360 Agent System", environment=settings.environment)
 
     try:
+        # Log LangSmith tracing status (already set at module level)
+        if settings.langchain_tracing_v2 and settings.langchain_api_key:
+            logger.info(
+                "LangSmith tracing enabled",
+                project=settings.langchain_project,
+                endpoint=getattr(settings, 'langsmith_endpoint', 'default'),
+                tracing_v2=os.getenv("LANGCHAIN_TRACING_V2", "not set")
+            )
+        else:
+            logger.info("LangSmith tracing disabled (set LANGCHAIN_TRACING_V2=true and LANGCHAIN_API_KEY to enable)")
+
         # Initialize database
         await init_db()
         await ensure_pgvector_extension()

@@ -1,10 +1,19 @@
 """
 Base agent class for all DV360 agents.
 """
+import os
 from typing import Dict, List, Any, Optional, TypedDict
 from abc import ABC, abstractmethod
 import time
 from uuid import UUID
+
+# CRITICAL: Ensure LangSmith env vars are set before importing LangChain components
+# This ensures tracing is enabled when LLMs are initialized
+if not os.getenv("LANGCHAIN_TRACING_V2") and os.getenv("LANGCHAIN_API_KEY"):
+    # Try to enable tracing if API key is present
+    os.environ["LANGCHAIN_TRACING_V2"] = "true"
+    if not os.getenv("LANGCHAIN_PROJECT"):
+        os.environ["LANGCHAIN_PROJECT"] = "dv360-agent-system"
 
 from langchain_core.messages import BaseMessage, HumanMessage, AIMessage, SystemMessage
 from langchain_openai import ChatOpenAI
@@ -69,7 +78,22 @@ class BaseAgent(ABC):
 
         Priority: Anthropic (Claude) > OpenAI (GPT)
         Note: OpenAI key may also be used for embeddings only.
+
+        LangSmith tracing is automatically enabled when:
+        - LANGCHAIN_TRACING_V2=true
+        - LANGCHAIN_API_KEY is set
+        - LANGCHAIN_PROJECT is set
+
+        No manual tracer setup needed - LangChain handles it automatically.
         """
+        # Log tracing status
+        if os.getenv("LANGCHAIN_TRACING_V2") == "true":
+            logger.info(
+                "LangSmith tracing enabled via environment variables",
+                project=os.getenv("LANGCHAIN_PROJECT", "default"),
+                api_key_set=bool(os.getenv("LANGCHAIN_API_KEY"))
+            )
+
         if settings.anthropic_api_key:
             logger.info("Using Anthropic Claude for LLM", model=settings.anthropic_model)
             return ChatAnthropic(

@@ -8,6 +8,7 @@ from uuid import UUID
 from datetime import datetime
 
 from ...agents.conductor import chat_conductor
+from ...agents.orchestrator import orchestrator
 from ...memory.session_manager import session_manager
 from ...schemas.agent import AgentInput
 from ...schemas.chat import ChatMessage, SessionInfo, SessionCreate
@@ -83,7 +84,7 @@ async def send_message(request: ChatRequest):
             )
             logger.info(f"Created new session: {session_id}")
 
-        # Process message through conductor
+        # Process message through orchestrator (RouteFlow architecture)
         agent_input = AgentInput(
             message=request.message,
             session_id=session_id,
@@ -91,7 +92,8 @@ async def send_message(request: ChatRequest):
             context=request.context,
         )
 
-        output = await chat_conductor.invoke(agent_input)
+        # Use new orchestrator instead of old conductor
+        output = await orchestrator.invoke(agent_input)
 
         # Calculate execution time
         execution_time_ms = int((time.time() - start_time) * 1000)

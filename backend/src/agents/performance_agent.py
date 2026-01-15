@@ -113,16 +113,25 @@ Be concise, data-driven, and actionable. Focus on insights that drive results.""
             tools_used.append("snowflake_query")
             reasoning_steps.append(f"Retrieved {len(performance_data)} days of performance data")
 
-            # Step 4: Analyze the data
+            # Step 4: Analyze the data (using Python for metrics)
             analysis = self._analyze_performance(performance_data, session_memory)
             reasoning_steps.append("Completed performance analysis")
 
-            # Step 5: Generate recommendations
+            # Step 5: Generate recommendations (using Python for rule-based insights)
             recommendations = self._generate_recommendations(analysis, session_memory)
             reasoning_steps.append("Generated optimization recommendations")
 
-            # Step 6: Format response
-            response = self._format_response(analysis, recommendations)
+            # Step 6: Use LLM to generate natural language response
+            reasoning_steps.append("Generating natural language analysis with LLM")
+            response = await self._generate_llm_response(
+                query=input_data.message,
+                performance_data=performance_data,
+                analysis=analysis,
+                recommendations=recommendations,
+                session_memory=session_memory
+            )
+            tools_used.append("llm_analysis")
+            reasoning_steps.append("LLM generated final response")
 
             # Step 7: Log decision
             execution_time_ms = int((time.time() - start_time) * 1000)
@@ -456,6 +465,88 @@ Be concise, data-driven, and actionable. Focus on insights that drive results.""
                 parts.append("")
 
         return "\n".join(parts)
+
+    async def _generate_llm_response(
+        self,
+        query: str,
+        performance_data: list[Dict[str, Any]],
+        analysis: Dict[str, Any],
+        recommendations: list[Dict[str, str]],
+        session_memory: Optional[Any]
+    ) -> str:
+        """
+        Use LLM to generate natural language analysis and recommendations.
+
+        Args:
+            query: Original user query
+            performance_data: Raw performance data
+            analysis: Python-generated analysis
+            recommendations: Python-generated recommendations
+            session_memory: Session memory context
+
+        Returns:
+            Natural language response from LLM
+        """
+        from langchain_core.messages import SystemMessage, HumanMessage
+        import json
+
+        # Build context for LLM
+        system_prompt = self.get_system_prompt()
+
+        # Summarize data for LLM (don't send all 30 days, just summary)
+        data_summary = {
+            "total_days": len(performance_data),
+            "key_metrics": analysis.get("metrics", {}),
+            "trends": analysis.get("trends", {}),
+            "issues": analysis.get("issues", []),
+        }
+
+        # Build memory context
+        memory_context = ""
+        if session_memory and session_memory.relevant_learnings:
+            memory_context = "\n\nRelevant past learnings:\n"
+            for learning in session_memory.relevant_learnings[:3]:
+                memory_context += f"- {learning.content} (confidence: {learning.confidence_score:.0%})\n"
+
+        # Build recommendations summary
+        recs_summary = "\n".join([
+            f"- [{rec['priority']}] {rec['action']}: {rec['reason']}"
+            for rec in recommendations[:5]
+        ])
+
+        user_prompt = f"""User Query: "{query}"
+
+Performance Data Summary:
+{json.dumps(data_summary, indent=2)}
+
+Detected Issues:
+{chr(10).join(f'- {issue}' for issue in analysis.get('issues', []))}
+
+Recommended Actions:
+{recs_summary}
+{memory_context}
+
+Please generate a clear, actionable response that:
+1. Summarizes the campaign's current performance
+2. Explains key trends and metrics
+3. Identifies any issues or concerns
+4. Provides specific, prioritized recommendations
+
+Format your response in markdown with clear sections."""
+
+        try:
+            messages = [
+                SystemMessage(content=system_prompt),
+                HumanMessage(content=user_prompt)
+            ]
+
+            response = self.llm.invoke(messages)
+            return response.content
+
+        except Exception as e:
+            logger.error("LLM response generation failed, falling back to template", error_message=str(e))
+            # Fallback to old template method if LLM fails
+            return self._format_response(analysis, recommendations)
 
 
 # Global instance

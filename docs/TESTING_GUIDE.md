@@ -518,7 +518,7 @@ Check LangSmith console:
 Create a test report:
 
 ```bash
-cat > /Users/neilblyth/Documents/Apps/TestAgentMemory/TEST_RESULTS.md << 'EOF'
+cat > /tmp/test_results.md << 'EOF'
 # System Test Results
 
 **Date:** $(date)

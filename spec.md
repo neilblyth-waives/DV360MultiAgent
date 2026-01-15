@@ -1437,9 +1437,10 @@ dv360-agent-system/
 │   ├── init-db.sql ✅
 │   └── k8s/
 ├── docs/
-│   ├── SPRINT1_COMPLETE.md ✅
-│   ├── SPRINT2_PROGRESS.md ✅
-│   └── architecture.md
+│   ├── LANGSMITH_TRACING_GUIDE.md ✅
+│   ├── TESTING_GUIDE.md ✅
+│   ├── SNOWFLAKE_QUERY_GUIDE.md ✅
+│   └── PRODUCTION_CONFIG.md ✅
 ├── .env.example ✅
 ├── .gitignore ✅
 ├── Makefile ✅
@@ -1479,6 +1480,8 @@ See `backend/requirements.txt` for full list. Key dependencies:
 **End of Specification Document**
 
 For the latest updates, see:
-- `docs/SPRINT2_PROGRESS.md` - Current progress
+- `SYSTEM_STATUS.md` - Current system status
+- `RECENT_CHANGES.md` - Latest updates and changes
+- `COMPLETE_SYSTEM_SUMMARY.md` - Complete system overview
 - `README.md` - Quick start guide
 - GitHub repository - Source code

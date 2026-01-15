@@ -3,6 +3,7 @@ Decision logging tool to track all agent decisions.
 """
 from typing import Dict, Any, List, Optional
 from uuid import UUID
+from datetime import date, datetime
 import time
 import json
 
@@ -12,6 +13,16 @@ from ..schemas.agent import AgentDecisionCreate
 
 
 logger = get_logger(__name__)
+
+
+def json_serializer(obj: Any) -> str:
+    """
+    Custom JSON serializer for objects not serializable by default json code.
+    Handles date, datetime, and other common non-serializable types.
+    """
+    if isinstance(obj, (date, datetime)):
+        return obj.isoformat()
+    raise TypeError(f"Type {type(obj)} not serializable")
 
 
 class DecisionLogger:
@@ -62,9 +73,9 @@ class DecisionLogger:
                     decision.message_id,
                     decision.agent_name,
                     decision.decision_type,
-                    json.dumps(decision.input_data) if decision.input_data else None,
-                    json.dumps(decision.output_data) if decision.output_data else None,
-                    json.dumps(decision.tools_used) if decision.tools_used else None,
+                    json.dumps(decision.input_data, default=json_serializer) if decision.input_data else None,
+                    json.dumps(decision.output_data, default=json_serializer) if decision.output_data else None,
+                    json.dumps(decision.tools_used, default=json_serializer) if decision.tools_used else None,
                     decision.reasoning,
                     decision.execution_time_ms,
                 )
