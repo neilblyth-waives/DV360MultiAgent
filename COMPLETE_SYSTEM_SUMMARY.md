@@ -20,7 +20,7 @@ Multi-agent DV360 (Display & Video 360) analysis system that:
 ### Current Production Setup
 ✅ **Active Coordinator**: Orchestrator (RouteFlow) at `backend/src/agents/orchestrator.py`
 ✅ **API Endpoint**: `/api/chat/` routes to Orchestrator
-✅ **Active Agents**: PerformanceAgentLangGraph, DeliveryAgentLangGraph, BudgetRiskAgent
+✅ **Active Agents**: PerformanceAgent (ReAct), DeliveryAgentLangGraph, BudgetRiskAgent (ReAct)
 ✅ **Memory**: PostgreSQL + pgvector + Redis + OpenAI embeddings
 ✅ **Tracing**: LangSmith (if enabled)
 ✅ **Backend Running**: FastAPI on port 8000
@@ -122,54 +122,31 @@ Multi-agent DV360 (Display & Video 360) analysis system that:
 
 ## 🔧 All Available Tools
 
-### Snowflake Tools (5 tools)
+### Snowflake Tools (1 tool)
 
-#### 1. `execute_custom_snowflake_query`
+#### 1. `execute_custom_snowflake_query` - **ONLY Snowflake Tool**
 ```python
-# LLM can generate arbitrary SQL queries
-# Used by ReAct agents for flexible data access
+# LLM generates arbitrary SQL queries dynamically
+# Used by ALL ReAct agents for flexible data access
 # File: backend/src/tools/snowflake_tools.py
 
 Input: query (str) - SQL query to execute
-Returns: List[Dict] - Query results as JSON
-Tables Available:
-  - DV360_PERFORMANCE_QUIZ (campaign metrics)
-  - DV360_BUDGETS_QUIZ (budget data)
-  - DV360_CREATIVE_QUIZ (creative performance)
-  - DV360_AUDIENCE_QUIZ (audience segments)
+Returns: JSON string - Query results as JSON array
+
+Available Tables:
+  - reports.reporting_revamp.ALL_PERFORMANCE_AGG (main performance data)
+  - reports.reporting_revamp.creative_name_agg (creative performance)
+  - reports.multi_agent.DV360_BUDGETS_QUIZ (budget data)
+
+Schema Documentation: See docs/SNOWFLAKE_SCHEMA_REFERENCE.md
+
+Example Usage:
+  - Agents build SQL queries based on user query
+  - Full schema information provided in system prompts
+  - LLM decides what data is needed and constructs query
 ```
 
-#### 2. `query_campaign_performance`
-```python
-# Pre-built query for campaign-level metrics
-Input: campaign_id (optional), advertiser_id (optional), date_range (optional)
-Returns: Performance metrics (impressions, clicks, CTR, conversions, spend, ROAS)
-Example: "Get performance for campaign_id='12345' last 30 days"
-```
-
-#### 3. `query_budget_pacing`
-```python
-# Budget utilization and pacing data
-Input: campaign_id (optional), advertiser_id (optional)
-Returns: Budget allocation, spend, pacing percentage, days remaining
-Table: DV360_BUDGETS_QUIZ
-```
-
-#### 4. `query_audience_performance`
-```python
-# Audience segment performance
-Input: campaign_id (optional), segment_name (optional)
-Returns: Performance by audience segment (CTR, conversion rate, etc.)
-Table: DV360_AUDIENCE_QUIZ
-```
-
-#### 5. `query_creative_performance`
-```python
-# Creative asset performance
-Input: campaign_id (optional), creative_id (optional)
-Returns: Performance by creative (impressions, CTR, creative size, format)
-Table: DV360_CREATIVE_QUIZ
-```
+**Note**: All bespoke query tools removed (query_campaign_performance, query_budget_pacing, query_audience_performance, query_creative_performance). Agents now build SQL dynamically using complete schema information in their system prompts.
 
 ### Memory Tools (2 tools)
 
@@ -219,27 +196,24 @@ Source: PostgreSQL sessions + messages tables
 
 AGENT_TOOL_REGISTRY = {
     "performance_diagnosis": [
-        execute_custom_snowflake_query,
-        query_campaign_performance,
+        execute_custom_snowflake_query,  # ONLY Snowflake tool
         retrieve_relevant_learnings,
         get_session_history
     ],
     "budget_risk": [
-        execute_custom_snowflake_query,
-        query_budget_pacing,
-        query_campaign_performance,
+        execute_custom_snowflake_query,  # ONLY Snowflake tool
         retrieve_relevant_learnings,
         get_session_history
     ],
     "delivery_optimization": [
-        execute_custom_snowflake_query,
-        query_creative_performance,
-        query_audience_performance,
-        query_campaign_performance,
+        execute_custom_snowflake_query,  # ONLY Snowflake tool
         retrieve_relevant_learnings,
         get_session_history
     ]
 }
+
+# All agents use execute_custom_snowflake_query to build SQL dynamically
+# Schema information provided in each agent's system prompt
 ```
 
 ---
@@ -631,8 +605,7 @@ async def _react_data_collection_node(self, state: PerformanceAgentState):
     Creates ReAct agent that dynamically selects tools
 
     Tools available:
-    - execute_custom_snowflake_query (SQL generation)
-    - query_campaign_performance (pre-built query)
+    - execute_custom_snowflake_query (dynamic SQL - builds queries based on user needs)
     - retrieve_relevant_learnings (memory search)
     - get_session_history (context)
     """
@@ -1283,16 +1256,14 @@ backend/
 │   │   ├── early_exit_node.py                # Conditional exit
 │   │   ├── recommendation_agent.py           # Recommendation generation
 │   │   ├── validation_agent.py               # Recommendation validation
-│   │   ├── performance_agent_langgraph.py    # Performance specialist (LangGraph)
+│   │   ├── performance_agent_simple.py        # Performance specialist (ReAct)
 │   │   ├── delivery_agent_langgraph.py       # Delivery specialist (LangGraph)
 │   │   ├── budget_risk_agent.py              # Budget specialist (ReAct)
-│   │   ├── conductor.py                      # Legacy conductor
-│   │   ├── performance_agent.py              # Legacy performance (class-based)
-│   │   ├── audience_agent.py                 # Legacy audience (class-based)
-│   │   └── creative_agent.py                 # Legacy creative (class-based)
+│   │   ├── audience_agent_simple.py          # Audience specialist (ReAct)
+│   │   └── creative_agent_simple.py          # Creative specialist (ReAct)
 │   ├── tools/
 │   │   ├── __init__.py
-│   │   ├── snowflake_tools.py                # 5 Snowflake query tools
+│   │   ├── snowflake_tools.py                # 1 Snowflake query tool (execute_custom_snowflake_query)
 │   │   ├── memory_tools.py                   # 2 memory retrieval tools
 │   │   ├── agent_tools.py                    # Tool registry
 │   │   ├── snowflake_tool.py                 # Legacy Snowflake (class)

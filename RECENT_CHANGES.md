@@ -3,11 +3,171 @@
 **Last Updated**: 2026-01-15  
 **Status**: Current implementation details
 
+**Note**: This document tracks recent changes. For complete system overview, see `COMPLETE_SYSTEM_SUMMARY.md`.
+
 ---
 
 ## Overview
 
 This document tracks recent changes and improvements to the DV360 Agent System. For historical context, see `ROUTEFLOW_MIGRATION_COMPLETE.md`.
+
+---
+
+## 🎯 Latest Changes (2026-01-15)
+
+### BaseAgent Cleanup - Removed Unused Methods
+
+**File**: `backend/src/agents/base.py`
+
+**Change**: Removed 2 unused helper methods
+
+**Removed Methods**:
+- ❌ `_format_messages()` - Convert dict messages to LangChain objects (never used)
+- ❌ `_build_context()` - Format context string from memories (never used)
+
+**Kept Method**:
+- ✅ `invoke()` - Wrapper with logging/error handling (actively used by orchestrator)
+
+**Impact**: 
+- Reduced `base.py` from 247 lines to 200 lines (47 lines removed)
+- Cleaner codebase with only actively used methods
+- No functionality lost (methods were never called)
+
+**Rationale**:
+- Agents create messages directly using `SystemMessage()`, `HumanMessage()` - no need for conversion
+- Agents handle context building in their own `process()` methods
+- `invoke()` remains as it's the standard entry point used by orchestrator
+
+---
+
+## 🎯 Latest Changes (2026-01-15)
+
+### Tool Consolidation - Single Custom Query Tool
+
+**Files**: 
+- `backend/src/tools/snowflake_tools.py`
+- `backend/src/tools/agent_tools.py`
+- `backend/src/tools/__init__.py`
+
+**Change**: Removed 4 bespoke query tools, consolidated to single `execute_custom_snowflake_query`
+
+**Removed Tools**:
+- ❌ `query_campaign_performance`
+- ❌ `query_budget_pacing`
+- ❌ `query_audience_performance`
+- ❌ `query_creative_performance`
+
+**Kept Tool**:
+- ✅ `execute_custom_snowflake_query` - **ONLY Snowflake query tool**
+
+**Rationale**:
+- Agents have complete schema information in system prompts
+- LLM can build SQL queries dynamically
+- More flexible than pre-built query functions
+- Easier to maintain (one tool vs five)
+
+**Impact**: 
+- All agents now build SQL queries themselves
+- Enhanced `execute_custom_snowflake_query` with complete schema documentation
+- Created `docs/SNOWFLAKE_SCHEMA_REFERENCE.md` for reference
+
+---
+
+### Agent Cleanup - Removed Legacy Agents
+
+**Files Removed**:
+- ❌ `backend/src/agents/conductor.py` (~420 lines)
+- ❌ `backend/src/agents/performance_agent.py` (~500 lines)
+- ❌ `backend/src/agents/audience_agent.py` (~400 lines)
+- ❌ `backend/src/agents/creative_agent.py` (~500 lines)
+- ❌ `backend/src/agents/performance_agent_langgraph.py` (~660 lines)
+
+**Total Removed**: ~2,480 lines of unused code
+
+**Why Removed**:
+- Legacy agents only used by `conductor.py` (which isn't used)
+- Replaced by simpler ReAct agents (`*_agent_simple.py`)
+- Orchestrator uses simple ReAct agents, not legacy ones
+
+**Active Agents** (Kept):
+- ✅ `performance_agent_simple.py` - ReAct-based performance agent
+- ✅ `audience_agent_simple.py` - ReAct-based audience agent
+- ✅ `creative_agent_simple.py` - ReAct-based creative agent
+- ✅ `budget_risk_agent.py` - ReAct-based budget agent
+- ✅ `delivery_agent_langgraph.py` - LangGraph delivery agent
+
+**Impact**:
+- Cleaner codebase
+- Less confusion about which agents are active
+- Easier maintenance
+
+---
+
+### Diagnosis Optimization
+
+**File**: `backend/src/agents/orchestrator.py`
+
+**Change**: Skip diagnosis for single-agent informational queries
+
+**Optimization**:
+- Detects informational queries ("what is", "how is", "show me")
+- If only 1 agent invoked AND query is informational → skip diagnosis
+- Uses agent response directly as diagnosis summary
+
+**Time Savings**: ~4.5 seconds (23% reduction for simple queries)
+
+**Code**:
+```python
+if len(approved_agents) == 1 and self._is_informational_query(query):
+    # Skip diagnosis, use agent response directly
+    diagnosis = {"summary": agent_output.response, "severity": "low", ...}
+```
+
+---
+
+### State Management Improvements
+
+**File**: `backend/src/agents/orchestrator.py`
+
+**Change**: Use `gate_result` as single source of truth
+
+**Before**: Stored redundant data
+```python
+{
+    "gate_result": {...},
+    "approved_agents": [...],  # Duplicate
+    "gate_warnings": [...]     # Duplicate
+}
+```
+
+**After**: Single source of truth
+```python
+{
+    "gate_result": {...}  # Contains approved_agents, warnings, etc.
+}
+```
+
+**Access Pattern**: `state["gate_result"]["approved_agents"]`
+
+---
+
+### Snowflake Tool Cleanup
+
+**File**: `backend/src/tools/snowflake_tool.py`
+
+**Removed Unused Methods**:
+- ❌ `get_campaign_performance()` - Not used (removed tool)
+- ❌ `get_budget_pacing()` - Not used (removed tool)
+- ❌ `get_audience_performance()` - Not used (removed tool)
+- ❌ `get_creative_performance()` - Not used (removed tool)
+
+**Kept**:
+- ✅ `execute_query()` - Core query execution
+- ✅ Connection logic
+- ✅ Authentication logic
+- ✅ Query caching
+
+**Impact**: Reduced from ~420 lines to ~212 lines
 
 ---
 

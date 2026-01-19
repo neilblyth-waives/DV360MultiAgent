@@ -1,6 +1,6 @@
 # DV360 Agent System - Current Status
 
-**Last Updated**: 2026-01-15 14:22 UTC  
+**Last Updated**: 2026-01-15  
 **Recent Changes**: See `RECENT_CHANGES.md` for latest updates  
 **Status**: ✅ **FULLY OPERATIONAL**
 
@@ -20,16 +20,18 @@
 ### Initialized Agents
 ```
 ✅ Orchestrator (RouteFlow) - Main coordinator
-✅ Performance Agent (LangGraph) - Campaign analysis
+✅ Performance Agent (ReAct) - Campaign analysis
 ✅ Delivery Agent (LangGraph) - Creative + Audience
 ✅ Budget Risk Agent (ReAct) - Budget & pacing
 ✅ Routing Agent - Intelligent routing
 ✅ Gate Node - Validation
-✅ Diagnosis Agent - Root cause analysis
+✅ Diagnosis Agent - Root cause analysis (skipped for single-agent informational queries)
 ✅ Early Exit Node - Conditional routing
 ✅ Recommendation Agent - Recommendation generation
 ✅ Validation Agent - Quality assurance
 ```
+
+**Note**: Legacy agents removed (conductor, performance_agent, audience_agent, creative_agent, performance_agent_langgraph). System now uses simplified ReAct agents.
 
 ### LLM Configuration
 ```
@@ -50,6 +52,15 @@
 3. **SYSTEM_ARCHITECTURE_GUIDE.md** - Deep dive into patterns and code
 4. **ROUTEFLOW_MIGRATION_COMPLETE.md** - Historical context
 5. **RECENT_CHANGES.md** - Latest updates and implementation details ⭐ NEW
+
+**New Documentation (2026-01-15)**:
+- **docs/ORCHESTRATOR_COMPLETE_BREAKDOWN.md** - Complete orchestrator explanation
+- **docs/CLASS_ARCHITECTURE_EXPLANATION.md** - BaseAgent inheritance pattern
+- **docs/TRACE_ANALYSIS_BUDGET_QUERY.md** - Performance analysis
+- **docs/TOOL_CONSOLIDATION.md** - Tool consolidation rationale
+- **docs/SNOWFLAKE_SCHEMA_REFERENCE.md** - Complete schema documentation
+- **docs/AGENT_CLEANUP_ANALYSIS.md** - Agent removal analysis
+- **docs/LANGSMITH_TRACE_EXPLANATION.md** - Trace structure explanation
 
 **Detailed Docs:**
 
@@ -171,36 +182,33 @@ Orchestrator (RouteFlow)
     └─► Response (markdown formatted)
 ```
 
-### Available Tools (10 total)
+### Available Tools (3 total)
 
-**Snowflake Tools (5)**:
-- execute_custom_snowflake_query (dynamic SQL)
-- query_campaign_performance
-- query_budget_pacing
-- query_audience_performance
-- query_creative_performance
+**Snowflake Tools (1)**:
+- execute_custom_snowflake_query (dynamic SQL) - **ONLY Snowflake tool**
 
 **Memory Tools (2)**:
 - retrieve_relevant_learnings (pgvector semantic search)
 - get_session_history
 
-**Legacy Tools (3)**:
-- snowflake_tool, memory_retrieval_tool, decision_logger
+**Note**: All bespoke query tools removed (query_campaign_performance, query_budget_pacing, query_audience_performance, query_creative_performance). Agents build SQL dynamically using `execute_custom_snowflake_query`.
 
 ---
 
 ## 📈 Performance Metrics
 
 ### Typical Execution Times
-- Simple query (1 agent): ~5-8 seconds
+- Simple query (1 agent, informational): ~3-5 seconds (diagnosis skipped)
+- Simple query (1 agent, action-oriented): ~5-8 seconds
 - Complex query (3 agents): ~12-15 seconds
 - Routing decision: ~1-2 seconds
 - Specialist agent: ~3-5 seconds each (parallel)
-- Diagnosis + Recommendations: ~4-6 seconds
+- Diagnosis + Recommendations: ~4-6 seconds (skipped for single-agent informational queries)
 
 ### Optimization Features
 ✅ Parallel agent execution
 ✅ Early exit for simple queries
+✅ Diagnosis skip for single-agent informational queries (~4.5s savings)
 ✅ Query caching (60min TTL)
 ✅ Session caching (24h TTL)
 ✅ Connection pooling (PostgreSQL, Redis)

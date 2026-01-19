@@ -1,7 +1,7 @@
 """
 DV360 Agent System - Agents Module
 """
-from .base import BaseAgent, BaseAgentState
+from .base import BaseAgent
 
 # Specialist agents (ReAct-based)
 from .budget_risk_agent import BudgetRiskAgent, budget_risk_agent
@@ -23,7 +23,6 @@ from .validation_agent import ValidationAgent, validation_agent
 
 __all__ = [
     "BaseAgent",
-    "BaseAgentState",
     # Specialist agents (ReAct-based)
     "BudgetRiskAgent",
     "budget_risk_agent",
