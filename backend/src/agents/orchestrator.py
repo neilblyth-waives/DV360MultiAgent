@@ -20,10 +20,13 @@ from .early_exit_node import early_exit_node
 from .recommendation_agent import recommendation_agent
 from .validation_agent import validation_agent
 
-# Import specialist agents
-from .performance_agent_langgraph import performance_agent_langgraph
-from .delivery_agent_langgraph import delivery_agent_langgraph
+# Import specialist agents (simplified ReAct versions)
+from .performance_agent_simple import performance_agent_simple
+from .audience_agent_simple import audience_agent_simple
+from .creative_agent_simple import creative_agent_simple
 from .budget_risk_agent import budget_risk_agent
+# Legacy agents (kept for backward compatibility)
+from .delivery_agent_langgraph import delivery_agent_langgraph
 
 from ..schemas.agent import AgentInput, AgentOutput
 from ..schemas.agent_state import OrchestratorState, create_initial_orchestrator_state
@@ -57,11 +60,13 @@ class Orchestrator(BaseAgent):
             tools=[],
         )
 
-        # Registry of specialist agents
+        # Registry of specialist agents (simplified ReAct versions)
         self.specialist_agents = {
-            "performance_diagnosis": performance_agent_langgraph,
-            "delivery_optimization": delivery_agent_langgraph,
-            "budget_risk": budget_risk_agent,
+            "performance_diagnosis": performance_agent_simple,  # IO-level metrics
+            "audience_targeting": audience_agent_simple,        # Line item metrics
+            "creative_inventory": creative_agent_simple,        # Creative name/size
+            "budget_risk": budget_risk_agent,                   # Budget pacing
+            "delivery_optimization": delivery_agent_langgraph,  # Legacy combined agent
         }
 
         # Build LangGraph
@@ -161,8 +166,6 @@ IMPORTANT: The current date is {current_date} (year {current_year}). All date re
 
         return {
             "gate_result": gate_result,
-            "approved_agents": gate_result.get("approved_agents", []),
-            "gate_warnings": gate_result.get("warnings", []),
             "reasoning_steps": [
                 f"Gate: approved {len(gate_result.get('approved_agents', []))} agents, "
                 f"{len(gate_result.get('warnings', []))} warnings"
@@ -183,7 +186,8 @@ IMPORTANT: The current date is {current_date} (year {current_year}). All date re
 
     async def _invoke_agents_node(self, state: OrchestratorState) -> Dict[str, Any]:
         """Invoke approved specialist agents."""
-        approved_agents = state["approved_agents"]
+        gate_result = state.get("gate_result", {})
+        approved_agents = gate_result.get("approved_agents", [])
         query = state["query"]
         session_id = state.get("session_id")
         user_id = state["user_id"]
@@ -231,10 +235,50 @@ IMPORTANT: The current date is {current_date} (year {current_year}). All date re
         """Analyze agent results to find root causes."""
         agent_results = state["agent_results"]
         query = state["query"]
+        gate_result = state.get("gate_result", {})
+        approved_agents = gate_result.get("approved_agents", [])
+
+        # Optimization: Skip diagnosis for single-agent informational queries
+        # Diagnosis is valuable for multi-agent scenarios but adds overhead for simple queries
+        if len(approved_agents) == 1 and self._is_informational_query(query):
+            logger.info("Skipping diagnosis for single-agent informational query")
+            
+            # Use agent response directly as diagnosis summary
+            agent_name = approved_agents[0]
+            agent_output = agent_results.get(agent_name)
+            
+            if agent_output:
+                diagnosis = {
+                    "summary": agent_output.response,
+                    "severity": "low",
+                    "root_causes": [],
+                    "correlations": [],
+                    "issues": [],
+                    "raw_response": None
+                }
+            else:
+                # Fallback if no agent output
+                diagnosis = {
+                    "summary": "Query processed successfully",
+                    "severity": "low",
+                    "root_causes": [],
+                    "correlations": [],
+                    "issues": [],
+                    "raw_response": None
+                }
+            
+            return {
+                "diagnosis": diagnosis,
+                "correlations": [],
+                "severity_assessment": "low",
+                "reasoning_steps": [
+                    "Diagnosis skipped: Single-agent informational query"
+                ]
+            }
 
         logger.info("Running diagnosis")
 
-        # Use diagnosis agent
+        # Use diagnosis agent for multi-agent or complex queries
         diagnosis = await diagnosis_agent.diagnose(agent_results, query)
 
         return {
@@ -246,6 +290,34 @@ IMPORTANT: The current date is {current_date} (year {current_year}). All date re
                 f"severity={diagnosis.get('severity')}"
             ]
         }
+
+    def _is_informational_query(self, query: str) -> bool:
+        """
+        Check if query is informational (asking for information) vs action-oriented.
+        
+        Informational queries: "what is", "how is", "show me", "tell me about", "explain"
+        Action-oriented queries: "optimize", "fix", "improve", "why is", "what's wrong"
+        """
+        query_lower = query.lower()
+        informational_keywords = [
+            "what is", "what are", "what was", "what will",
+            "how is", "how are", "how was", "how will",
+            "show me", "tell me", "explain", "describe",
+            "list", "give me", "provide"
+        ]
+        
+        action_keywords = [
+            "optimize", "fix", "improve", "why is", "why are",
+            "what's wrong", "what went wrong", "issue", "problem",
+            "recommend", "suggest", "should", "need to"
+        ]
+        
+        # Check for action keywords first (higher priority)
+        if any(keyword in query_lower for keyword in action_keywords):
+            return False
+        
+        # Check for informational keywords
+        return any(keyword in query_lower for keyword in informational_keywords)
 
     def _early_exit_decision(self, state: OrchestratorState) -> str:
         """Decision: exit early or continue to recommendations?"""
@@ -394,8 +466,17 @@ IMPORTANT: The current date is {current_date} (year {current_year}). All date re
             )
 
             # Invoke graph (async because nodes are async)
+            # NOTE: In LangSmith traces, this shows as "LangGraph" (framework name) but it IS the orchestrator
+            # The trace structure is: LangGraph → routing → gate → invoke_agents → diagnosis → early_exit
+            from langchain_core.runnables import RunnableConfig
+            
+            config = RunnableConfig(
+                tags=["orchestrator", "routeflow"],
+                metadata={"agent_name": "orchestrator", "query": input_data.message[:100]}
+            )
+            
             logger.info("Invoking orchestrator graph", query=input_data.message[:50])
-            final_state = await self.graph.ainvoke(initial_state)
+            final_state = await self.graph.ainvoke(initial_state, config=config)
 
             execution_time_ms = int((time.time() - start_time) * 1000)
 

@@ -7,10 +7,6 @@ from .decision_logger import decision_logger, DecisionLogger
 
 # New LangChain-compatible tools
 from .snowflake_tools import (
-    query_campaign_performance,
-    query_budget_pacing,
-    query_audience_performance,
-    query_creative_performance,
     execute_custom_snowflake_query,
     ALL_SNOWFLAKE_TOOLS,
 )
@@ -27,7 +23,6 @@ from .agent_tools import (
     get_budget_agent_tools,
     get_audience_agent_tools,
     get_creative_agent_tools,
-    get_conductor_tools,
 )
 
 __all__ = [
@@ -39,10 +34,6 @@ __all__ = [
     "decision_logger",
     "DecisionLogger",
     # New LangChain tools
-    "query_campaign_performance",
-    "query_budget_pacing",
-    "query_audience_performance",
-    "query_creative_performance",
     "execute_custom_snowflake_query",
     "retrieve_relevant_learnings",
     "get_session_history",
@@ -57,5 +48,4 @@ __all__ = [
     "get_budget_agent_tools",
     "get_audience_agent_tools",
     "get_creative_agent_tools",
-    "get_conductor_tools",
 ]

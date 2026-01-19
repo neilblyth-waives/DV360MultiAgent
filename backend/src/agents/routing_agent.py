@@ -34,16 +34,20 @@ class RoutingAgent:
         # Available specialist agents
         self.specialist_agents = {
             "performance_diagnosis": {
-                "description": "Analyzes campaign performance metrics, identifies issues, provides optimization recommendations",
-                "keywords": ["performance", "campaign", "metrics", "ctr", "roas", "conversions", "optimize", "kpis"],
+                "description": "Analyzes campaign performance at INSERTION ORDER (IO) level - overall campaign metrics, spend, impressions, clicks, conversions, revenue, CTR, ROAS. Use for top-line campaign performance questions.",
+                "keywords": ["performance", "campaign", "io", "insertion order", "metrics", "ctr", "roas", "conversions", "optimize", "kpis", "how is", "performing"],
+            },
+            "audience_targeting": {
+                "description": "Analyzes performance at LINE ITEM level - audience segments, targeting tactics, line item comparison within IOs. Use for questions about specific tactics, audiences, or line items.",
+                "keywords": ["audience", "line item", "targeting", "segment", "tactic", "line items", "audiences", "remarketing", "prospecting"],
+            },
+            "creative_inventory": {
+                "description": "Analyzes CREATIVE performance by creative name and ad size/format. Use for questions about which creatives or ad sizes are performing best, creative fatigue, or creative optimization.",
+                "keywords": ["creative", "ad", "banner", "size", "format", "asset", "fatigue", "300x250", "728x90", "creatives", "ads"],
             },
             "budget_risk": {
-                "description": "Analyzes budget data for Quiz advertiser and its insertion orders, provides budget pacing assessment, risk identification, and spend optimization recommendations. Handles queries about advertiser-level and insertion order-level budgets.",
-                "keywords": ["budget", "pacing", "spend", "allocation", "forecast", "risk", "depletion", "overspend", "quiz", "insertion order"],
-            },
-            "delivery_optimization": {
-                "description": "Analyzes creative performance and audience targeting effectiveness, provides delivery optimization recommendations",
-                "keywords": ["creative", "audience", "segment", "targeting", "fatigue", "refresh", "delivery", "asset"],
+                "description": "Analyzes BUDGET data for Quiz advertiser - budget pacing, risk identification, spend optimization. Use for questions about budgets, pacing, underspend, overspend.",
+                "keywords": ["budget", "pacing", "spend", "allocation", "forecast", "risk", "depletion", "overspend", "underspend"],
             },
         }
 

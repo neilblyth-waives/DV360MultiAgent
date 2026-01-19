@@ -16,235 +16,57 @@ logger = get_logger(__name__)
 
 
 @tool
-async def query_campaign_performance(
-    insertion_order: Optional[str] = None,
-    advertiser: Optional[str] = None,
-    start_date: Optional[str] = None,
-    end_date: Optional[str] = None,
-    limit: int = 30
-) -> str:
-    """
-    Query DV360 campaign performance metrics from Snowflake.
-
-    Returns daily performance data including:
-    - Impressions, clicks, conversions
-    - Spend and revenue
-    - Calculated metrics (CTR, CPC, CPA, ROAS)
-
-    Use this tool when analyzing overall campaign performance, metrics trends,
-    or diagnosing performance issues.
-
-    Args:
-        insertion_order: Campaign ID to filter (optional)
-        advertiser: Advertiser name to filter (optional)
-        start_date: Start date in YYYY-MM-DD format (optional)
-        end_date: End date in YYYY-MM-DD format (optional)
-        limit: Maximum number of days to return (default 30)
-
-    Returns:
-        JSON string with daily performance records
-    """
-    try:
-        logger.info(
-            "LLM calling query_campaign_performance",
-            insertion_order=insertion_order,
-            advertiser=advertiser,
-            limit=limit
-        )
-
-        results = await snowflake_tool.get_campaign_performance(
-            insertion_order=insertion_order,
-            advertiser=advertiser,
-            start_date=start_date,
-            end_date=end_date,
-            limit=limit
-        )
-
-        # Return as JSON string for LLM
-        return json.dumps(results, default=str)
-
-    except Exception as e:
-        logger.error("query_campaign_performance failed", error=str(e))
-        return json.dumps({"error": str(e)})
-
-
-@tool
-async def query_budget_pacing(
-    insertion_order_id: Optional[str] = None,
-    io_name: Optional[str] = None,
-    start_date: Optional[str] = None,
-    end_date: Optional[str] = None
-) -> str:
-    """
-    Query DV360 budget pacing data from Snowflake for Quiz advertiser.
-
-    CRITICAL CONTEXT - ADVERTISER vs INSERTION ORDER:
-    - ADVERTISER: "Quiz" is the advertiser name (NOT an insertion order)
-    - INSERTION ORDERS: Multiple IOs exist under Quiz advertiser (e.g., "Quiz for Jan", "Quiz for Feb")
-    - ALL budgets in table reports.multi_agent.DV360_BUDGETS_QUIZ are for Quiz advertiser
-    - Budgets are at MONTHLY segment level (each row = one month's budget for one IO)
-
-    USAGE GUIDELINES:
-    - To get ALL Quiz advertiser budgets: Leave io_name empty (returns all IOs)
-    - To get specific IO: Set io_name = "Quiz for Jan" (exact match)
-    - To filter by partial name: Use io_name = "Jan" (partial match with LIKE)
-
-    Returns monthly budget segments with:
-    - INSERTION_ORDER_ID: Insertion order ID
-    - IO_NAME: Insertion order name (e.g., "Quiz for Jan", "Quiz for Feb")
-    - IO_STATUS: Insertion order status (Active, Paused, etc.)
-    - SEGMENT_NUMBER: Monthly segment number (1, 2, 3...)
-    - BUDGET_AMOUNT: Total budget for the monthly segment
-    - SEGMENT_START_DATE: Start date of monthly segment
-    - SEGMENT_END_DATE: End date of monthly segment
-    - DAYS_IN_SEGMENT: Number of days in segment
-    - AVG_DAILY_BUDGET: Average daily budget
-    - SEGMENT_STATUS: Budget segment status
-
-    Use this tool when analyzing budget allocation, monthly budget segments,
-    or understanding budget structure for Quiz advertiser campaigns.
-
-    Args:
-        insertion_order_id: Optional insertion order ID to filter by
-        io_name: Optional insertion order name to filter by (supports partial match).
-                 Leave empty to get ALL insertion orders for Quiz advertiser.
-        start_date: Optional start date in YYYY-MM-DD format (filters by SEGMENT_START_DATE)
-        end_date: Optional end date in YYYY-MM-DD format (filters by SEGMENT_END_DATE)
-
-    Returns:
-        JSON string with list of monthly budget segment records
-    """
-    try:
-        logger.info(
-            "LLM calling query_budget_pacing",
-            insertion_order_id=insertion_order_id,
-            io_name=io_name,
-            start_date=start_date,
-            end_date=end_date
-        )
-
-        results = await snowflake_tool.get_budget_pacing(
-            insertion_order_id=insertion_order_id,
-            io_name=io_name,
-            start_date=start_date,
-            end_date=end_date
-        )
-
-        return json.dumps(results, default=str)
-
-    except Exception as e:
-        logger.error("query_budget_pacing failed", error=str(e))
-        return json.dumps({"error": str(e)})
-
-
-@tool
-async def query_audience_performance(
-    advertiser_id: str,
-    start_date: Optional[str] = None,
-    end_date: Optional[str] = None,
-    min_impressions: int = 1000
-) -> str:
-    """
-    Query DV360 audience segment performance from Snowflake.
-
-    Returns performance data by audience segment/line item including:
-    - Impressions, clicks, conversions per segment
-    - Spend and revenue per segment
-    - Segment-level CTR, CPC, CPA, ROAS
-
-    Use this tool when analyzing audience targeting effectiveness,
-    comparing segment performance, or optimizing audience strategy.
-
-    Args:
-        advertiser_id: Advertiser ID to filter
-        start_date: Start date in YYYY-MM-DD format (optional)
-        end_date: End date in YYYY-MM-DD format (optional)
-        min_impressions: Minimum impressions to include segment (default 1000)
-
-    Returns:
-        JSON string with audience segment performance records
-    """
-    try:
-        logger.info(
-            "LLM calling query_audience_performance",
-            advertiser_id=advertiser_id,
-            min_impressions=min_impressions
-        )
-
-        results = await snowflake_tool.get_audience_performance(
-            advertiser_id=advertiser_id,
-            start_date=start_date,
-            end_date=end_date,
-            min_impressions=min_impressions
-        )
-
-        return json.dumps(results, default=str)
-
-    except Exception as e:
-        logger.error("query_audience_performance failed", error=str(e))
-        return json.dumps({"error": str(e)})
-
-
-@tool
-async def query_creative_performance(
-    campaign_id: str,
-    start_date: Optional[str] = None,
-    end_date: Optional[str] = None
-) -> str:
-    """
-    Query DV360 creative asset performance from Snowflake.
-
-    Returns performance data by creative including:
-    - Impressions, clicks, conversions per creative
-    - Spend and revenue per creative
-    - Creative-level CTR, CVR, CPC, CPA, ROAS
-    - Creative size/format breakdown
-
-    Use this tool when analyzing creative effectiveness, detecting fatigue,
-    comparing creative variants, or planning creative refresh.
-
-    Args:
-        campaign_id: Campaign ID to filter
-        start_date: Start date in YYYY-MM-DD format (optional)
-        end_date: End date in YYYY-MM-DD format (optional)
-
-    Returns:
-        JSON string with creative performance records
-    """
-    try:
-        logger.info(
-            "LLM calling query_creative_performance",
-            campaign_id=campaign_id
-        )
-
-        results = await snowflake_tool.get_creative_performance(
-            campaign_id=campaign_id,
-            start_date=start_date,
-            end_date=end_date
-        )
-
-        return json.dumps(results, default=str)
-
-    except Exception as e:
-        logger.error("query_creative_performance failed", error=str(e))
-        return json.dumps({"error": str(e)})
-
-
-@tool
 async def execute_custom_snowflake_query(query: str) -> str:
     """
     Execute a custom SQL query against Snowflake DV360 data.
 
-    Use this tool when you need specific data that isn't available
-    from the specialized query tools. Be careful with query syntax.
+    **PRIMARY TOOL** - Use this for ALL Snowflake queries. Build SQL queries with dates, aggregations, filters as needed.
 
-    Available tables:
-    - reports.reporting_revamp.ALL_PERFORMANCE_AGG (main performance data)
-    - reports.reporting_revamp.creative_name_agg (creative data)
-    - reports.multi_agent.DV360_BUDGETS_QUIZ (budget data)
+    AVAILABLE TABLES:
+    =================
+    
+    1. reports.reporting_revamp.ALL_PERFORMANCE_AGG (main performance data)
+       - Daily metrics at IO and line item level
+       - Columns: advertiser, date, insertion_order, line_item, spend_gbp, impressions, clicks, total_conversions_pm, total_revenue_gbp_pm
+       - ALWAYS filter: WHERE advertiser = 'Quiz'
+       - Use for: Campaign performance, IO-level metrics, audience/line item analysis
+    
+    2. reports.reporting_revamp.creative_name_agg (creative performance)
+       - Daily metrics by creative name and size
+       - Columns: advertiser, date, insertion_order, creative, creative_size, spend_gbp, impressions, clicks, total_conversions_pm, total_revenue_gbp_pm
+       - ALWAYS filter: WHERE advertiser = 'Quiz'
+       - Use for: Creative effectiveness, creative size performance, creative fatigue
+    
+    3. reports.multi_agent.DV360_BUDGETS_QUIZ (budget data)
+       - Monthly budget segments for Quiz advertiser
+       - Columns: INSERTION_ORDER_ID, IO_NAME, IO_STATUS, SEGMENT_NUMBER, BUDGET_AMOUNT, SEGMENT_START_DATE, SEGMENT_END_DATE, DAYS_IN_SEGMENT, AVG_DAILY_BUDGET, SEGMENT_STATUS
+       - NO advertiser filter needed (already Quiz-specific)
+       - Use for: Budget allocation, monthly budgets, budget pacing
+    
+    SQL SYNTAX NOTES:
+    =================
+    - Date filtering: Use EXTRACT(MONTH FROM date) and EXTRACT(YEAR FROM date)
+    - Date format: Use 'YYYY-MM-DD' format (e.g., '2026-01-01')
+    - Aggregations: Use SUM(), COUNT(DISTINCT column), AVG() with GROUP BY
+    - Always include ORDER BY for consistent results
+    - Currency: All financial values are in BRITISH POUNDS (GBP/£)
+    
+    EXAMPLE QUERIES:
+    ================
+    -- IO-level performance:
+    SELECT insertion_order, SUM(spend_gbp) as TOTAL_SPEND, SUM(impressions) as TOTAL_IMPRESSIONS
+    FROM reports.reporting_revamp.ALL_PERFORMANCE_AGG
+    WHERE advertiser = 'Quiz' AND date >= '2026-01-01' AND date <= '2026-01-31'
+    GROUP BY insertion_order ORDER BY TOTAL_SPEND DESC
+    
+    -- Monthly budgets:
+    SELECT IO_NAME, BUDGET_AMOUNT, SEGMENT_START_DATE, SEGMENT_END_DATE
+    FROM reports.multi_agent.DV360_BUDGETS_QUIZ
+    WHERE EXTRACT(MONTH FROM SEGMENT_START_DATE) = 1 AND EXTRACT(YEAR FROM SEGMENT_START_DATE) = 2026
+    ORDER BY SEGMENT_START_DATE DESC
 
     Args:
-        query: SQL query string to execute
+        query: SQL query string to execute (must be valid Snowflake SQL)
 
     Returns:
         JSON string with query results
@@ -265,10 +87,7 @@ async def execute_custom_snowflake_query(query: str) -> str:
 
 
 # Export all tools as a list for easy agent registration
+# NOTE: Only execute_custom_snowflake_query is available - agents build SQL queries themselves
 ALL_SNOWFLAKE_TOOLS = [
-    query_campaign_performance,
-    query_budget_pacing,
-    query_audience_performance,
-    query_creative_performance,
     execute_custom_snowflake_query,
 ]

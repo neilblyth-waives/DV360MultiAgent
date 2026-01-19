@@ -111,6 +111,7 @@ class GateNode:
             "approved_agents": approved_agents
         }
 
+# CURRENTLY NOT USED
     def check_rate_limit(self, user_id: str) -> Dict[str, Any]:
         """
         Check if user has exceeded rate limits.

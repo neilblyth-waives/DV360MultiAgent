@@ -8,10 +8,6 @@ from typing import List
 from langchain_core.tools import BaseTool
 
 from .snowflake_tools import (
-    query_campaign_performance,
-    query_budget_pacing,
-    query_audience_performance,
-    query_creative_performance,
     execute_custom_snowflake_query,
     ALL_SNOWFLAKE_TOOLS,
 )
@@ -34,12 +30,11 @@ def get_performance_agent_tools() -> List[BaseTool]:
     """
     Get tools relevant for Performance Diagnosis Agent.
 
-    The agent can query campaign performance, execute custom SQL queries,
-    retrieve past learnings, and access session history.
+    The agent can execute custom SQL queries, retrieve past learnings,
+    and access session history.
     """
     return [
-        execute_custom_snowflake_query,  # Can build custom SQL queries
-        query_campaign_performance,
+        execute_custom_snowflake_query,  # Primary tool - build SQL queries for performance data
         retrieve_relevant_learnings,
         get_session_history,
     ]
@@ -49,13 +44,11 @@ def get_budget_agent_tools() -> List[BaseTool]:
     """
     Get tools relevant for Budget Pacing Agent.
 
-    The agent can query budget data, campaign performance (for context),
-    execute custom SQL queries, and retrieve past learnings about budget management.
+    The agent can execute custom SQL queries for budget data and retrieve
+    past learnings about budget management.
     """
     return [
-        execute_custom_snowflake_query,  # Primary tool - can build SQL with dates/aggregations
-        query_budget_pacing,
-        query_campaign_performance,  # Useful for context
+        execute_custom_snowflake_query,  # Primary tool - build SQL queries for budget data
         retrieve_relevant_learnings,
         get_session_history,
     ]
@@ -65,13 +58,11 @@ def get_audience_agent_tools() -> List[BaseTool]:
     """
     Get tools relevant for Audience Targeting Agent.
 
-    The agent can query audience performance, execute custom SQL queries,
-    campaign performance (for context), and retrieve past learnings about audience strategies.
+    The agent can execute custom SQL queries for audience/line item performance
+    and retrieve past learnings about audience strategies.
     """
     return [
-        execute_custom_snowflake_query,  # Can build custom SQL queries
-        query_audience_performance,
-        query_campaign_performance,  # Useful for context
+        execute_custom_snowflake_query,  # Primary tool - build SQL queries for audience data
         retrieve_relevant_learnings,
         get_session_history,
     ]
@@ -81,13 +72,11 @@ def get_creative_agent_tools() -> List[BaseTool]:
     """
     Get tools relevant for Creative Inventory Agent.
 
-    The agent can query creative performance, execute custom SQL queries,
-    campaign performance (for context), and retrieve past learnings about creative strategies.
+    The agent can execute custom SQL queries for creative performance
+    and retrieve past learnings about creative strategies.
     """
     return [
-        execute_custom_snowflake_query,  # Can build custom SQL queries
-        query_creative_performance,
-        query_campaign_performance,  # Useful for context
+        execute_custom_snowflake_query,  # Primary tool - build SQL queries for creative data
         retrieve_relevant_learnings,
         get_session_history,
     ]
@@ -97,28 +86,14 @@ def get_delivery_agent_tools() -> List[BaseTool]:
     """
     Get tools relevant for Delivery Agent (combines Creative + Audience).
 
-    The agent can query both creative and audience performance, execute custom SQL queries,
-    campaign performance for context, and retrieve past learnings
-    about delivery optimization strategies.
+    The agent can execute custom SQL queries for both creative and audience performance
+    and retrieve past learnings about delivery optimization strategies.
     """
     return [
-        execute_custom_snowflake_query,  # Can build custom SQL queries
-        query_creative_performance,
-        query_audience_performance,
-        query_campaign_performance,  # Useful for context
+        execute_custom_snowflake_query,  # Primary tool - build SQL queries for creative and audience data
         retrieve_relevant_learnings,
         get_session_history,
     ]
-
-
-def get_conductor_tools() -> List[BaseTool]:
-    """
-    Get tools available to the Conductor agent.
-
-    In LangGraph architecture, the Conductor can access all tools
-    or delegate to specialist agents as sub-graphs.
-    """
-    return ALL_TOOLS
 
 
 # Tool registry for easy lookup
@@ -128,7 +103,6 @@ AGENT_TOOL_REGISTRY = {
     "audience_targeting": get_audience_agent_tools,
     "creative_inventory": get_creative_agent_tools,
     "delivery_optimization": get_delivery_agent_tools,
-    "chat_conductor": get_conductor_tools,
 }
 
 

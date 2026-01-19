@@ -2,14 +2,14 @@
 DV360 Agent System - Agents Module
 """
 from .base import BaseAgent, BaseAgentState
-from .performance_agent import PerformanceAgent, performance_agent
-from .budget_risk_agent import BudgetRiskAgent, budget_risk_agent
-from .audience_agent import AudienceTargetingAgent, audience_targeting_agent
-from .creative_agent import CreativeInventoryAgent, creative_inventory_agent
-from .conductor import ChatConductor, chat_conductor
 
-# New LangGraph agents
-from .performance_agent_langgraph import PerformanceAgentLangGraph, performance_agent_langgraph
+# Specialist agents (ReAct-based)
+from .budget_risk_agent import BudgetRiskAgent, budget_risk_agent
+from .performance_agent_simple import PerformanceAgentSimple, performance_agent_simple
+from .audience_agent_simple import AudienceAgentSimple, audience_agent_simple
+from .creative_agent_simple import CreativeAgentSimple, creative_agent_simple
+
+# LangGraph agents
 from .delivery_agent_langgraph import DeliveryAgentLangGraph, delivery_agent_langgraph
 
 # RouteFlow components
@@ -24,20 +24,16 @@ from .validation_agent import ValidationAgent, validation_agent
 __all__ = [
     "BaseAgent",
     "BaseAgentState",
-    # Legacy class-based agents
-    "PerformanceAgent",
-    "performance_agent",
+    # Specialist agents (ReAct-based)
     "BudgetRiskAgent",
     "budget_risk_agent",
-    "AudienceTargetingAgent",
-    "audience_targeting_agent",
-    "CreativeInventoryAgent",
-    "creative_inventory_agent",
-    "ChatConductor",
-    "chat_conductor",
-    # New LangGraph agents
-    "PerformanceAgentLangGraph",
-    "performance_agent_langgraph",
+    "PerformanceAgentSimple",
+    "performance_agent_simple",
+    "AudienceAgentSimple",
+    "audience_agent_simple",
+    "CreativeAgentSimple",
+    "creative_agent_simple",
+    # LangGraph agents
     "DeliveryAgentLangGraph",
     "delivery_agent_langgraph",
     # RouteFlow components

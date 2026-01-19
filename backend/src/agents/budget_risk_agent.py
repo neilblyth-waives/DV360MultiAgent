@@ -94,15 +94,13 @@ NOTE: All financial values (BUDGET_AMOUNT, AVG_DAILY_BUDGET) are in British Poun
 
 AVAILABLE TOOLS:
 ================
-- execute_custom_snowflake_query: **PRIMARY TOOL** - Build custom SQL queries with dates, aggregations, filters. Use this for ALL budget queries to have full control over the query.
-- query_budget_pacing: **LEGACY/OPTIONAL** - Pre-built budget pacing queries. Only use if execute_custom_snowflake_query fails or for simple lookups.
-- query_campaign_performance: Campaign performance for spend context
+- execute_custom_snowflake_query: **ONLY TOOL** - Build custom SQL queries with dates, aggregations, filters. Use this for ALL budget queries.
 
-TOOL SELECTION PRIORITY:
-========================
-1. **ALWAYS prefer execute_custom_snowflake_query** - It gives you full control and flexibility
-2. Only use query_budget_pacing as a last resort if custom SQL fails
-3. The custom SQL tool allows you to build precise queries with proper date filtering, aggregations, and filters
+TOOL USAGE:
+===========
+- Use execute_custom_snowflake_query to build SQL queries against reports.multi_agent.DV360_BUDGETS_QUIZ
+- The tool description contains complete schema information for all tables
+- Build queries with proper date filtering, aggregations, and filters as needed
 
 SQL QUERY GUIDELINES:
 =====================

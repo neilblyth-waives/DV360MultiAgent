@@ -7,7 +7,6 @@ from typing import List, Optional, Dict, Any
 from uuid import UUID
 from datetime import datetime
 
-from ...agents.conductor import chat_conductor
 from ...agents.orchestrator import orchestrator
 from ...memory.session_manager import session_manager
 from ...schemas.agent import AgentInput
