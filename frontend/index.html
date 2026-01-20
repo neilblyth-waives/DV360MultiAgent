@@ -180,7 +180,7 @@
             transition: width 0.3s;
         }
 
-        /* Loading */
+        /* Loading (legacy - kept for fallback) */
         .loading {
             display: flex;
             align-items: center;
@@ -200,6 +200,91 @@
         @keyframes bounce {
             0%, 80%, 100% { transform: scale(0); }
             40% { transform: scale(1); }
+        }
+
+        /* Progress Stages */
+        .progress-stages {
+            display: flex;
+            flex-direction: column;
+            gap: 6px;
+            padding: 12px 16px;
+            background: #374151;
+            border-radius: 12px;
+            border-bottom-left-radius: 4px;
+            min-width: 280px;
+        }
+        .progress-stage {
+            display: flex;
+            align-items: center;
+            gap: 10px;
+            font-size: 13px;
+            color: #666;
+            transition: all 0.2s ease;
+        }
+        .progress-stage.active {
+            color: #fff;
+        }
+        .progress-stage.completed {
+            color: #4ade80;
+        }
+        .progress-stage .stage-icon {
+            width: 18px;
+            height: 18px;
+            display: flex;
+            align-items: center;
+            justify-content: center;
+            flex-shrink: 0;
+        }
+        .progress-stage .stage-icon .spinner {
+            width: 14px;
+            height: 14px;
+            border: 2px solid #3b82f6;
+            border-top-color: transparent;
+            border-radius: 50%;
+            animation: spin 0.8s linear infinite;
+        }
+        .progress-stage .stage-icon .check {
+            color: #4ade80;
+            font-size: 14px;
+        }
+        .progress-stage .stage-icon .pending {
+            width: 8px;
+            height: 8px;
+            background: #444;
+            border-radius: 50%;
+        }
+        @keyframes spin {
+            to { transform: rotate(360deg); }
+        }
+        .progress-stage .stage-text {
+            flex: 1;
+        }
+        .progress-stage .stage-time {
+            font-size: 11px;
+            color: #666;
+            font-family: monospace;
+        }
+        .progress-stage.completed .stage-time {
+            color: #4ade80;
+        }
+
+        /* Progress response (shown after stages complete) */
+        .progress-response {
+            margin-top: 8px;
+        }
+        .progress-divider {
+            height: 1px;
+            background: #444;
+            margin: 12px 0;
+        }
+        .progress-response .message-content {
+            padding: 0;
+            background: none;
+        }
+        .progress-response .message-meta {
+            font-size: 11px;
+            color: #888;
+            margin-top: 8px;
         }
 
         /* Markdown rendering */
@@ -331,6 +416,20 @@
         let currentTrace = null;
         let currentTab = 'overview';
 
+        // Phase display configuration
+        const PHASE_CONFIG = {
+            'routing': { name: 'Routing query', icon: '🎯' },
+            'gate': { name: 'Validating request', icon: '🛡️' },
+            'invoke_agents': { name: 'Running agents', icon: '🤖' },
+            'diagnosis': { name: 'Analyzing results', icon: '🔬' },
+            'recommendation': { name: 'Generating recommendations', icon: '💡' },
+            'validation': { name: 'Validating recommendations', icon: '✅' },
+            'generate_response': { name: 'Formatting response', icon: '📝' }
+        };
+
+        // All phases in order for display
+        const PHASE_ORDER = ['routing', 'gate', 'invoke_agents', 'diagnosis', 'recommendation', 'validation', 'generate_response'];
+
         // Check API health on load
         async function checkHealth() {
             try {
@@ -345,7 +444,7 @@
         }
         checkHealth();
 
-        // Send message
+        // Send message with streaming progress
         async function sendMessage() {
             const input = document.getElementById('input');
             const message = input.value.trim();
@@ -357,12 +456,13 @@
             // Add user message
             addMessage(message, 'user');
 
-            // Show loading
-            const loadingId = addLoading();
+            // Add progress indicator
+            const progressId = addProgressIndicator();
+            const startTime = Date.now();
 
             try {
-                const startTime = Date.now();
-                const res = await fetch(`${API_URL}/api/chat/`, {
+                // Use streaming endpoint
+                const response = await fetch(`${API_URL}/api/chat/stream`, {
                     method: 'POST',
                     headers: { 'Content-Type': 'application/json' },
                     body: JSON.stringify({
@@ -372,28 +472,193 @@
                     })
                 });
 
-                const data = await res.json();
-                const clientTime = Date.now() - startTime;
+                if (!response.ok) {
+                    throw new Error(`Server error: ${response.status}`);
+                }
 
-                // Update session
-                sessionId = data.session_id;
+                // Read streaming response
+                const reader = response.body.getReader();
+                const decoder = new TextDecoder();
+                let buffer = '';
 
-                // Remove loading and add response
-                removeLoading(loadingId);
-                addMessage(data.response, 'assistant', data);
+                while (true) {
+                    const { done, value } = await reader.read();
+                    if (done) break;
 
-                // Update trace panel
-                currentTrace = { ...data, client_time_ms: clientTime };
-                updateTracePanel();
+                    buffer += decoder.decode(value, { stream: true });
+
+                    // Process complete SSE messages (data: {...}\n\n)
+                    const lines = buffer.split('\n');
+                    buffer = lines.pop() || ''; // Keep incomplete line in buffer
+
+                    for (const line of lines) {
+                        if (line.startsWith('data: ')) {
+                            try {
+                                const eventData = JSON.parse(line.slice(6));
+                                handleStreamEvent(eventData, progressId, startTime);
+                            } catch (parseError) {
+                                console.error('Failed to parse SSE event:', parseError);
+                            }
+                        }
+                    }
+                }
 
             } catch (e) {
-                removeLoading(loadingId);
+                removeProgressIndicator(progressId);
                 addMessage('Error: Could not connect to the API. Make sure the backend is running.', 'assistant', { error: true });
                 console.error(e);
             }
 
             document.getElementById('send').disabled = false;
             input.focus();
+        }
+
+        // Handle streaming events
+        function handleStreamEvent(event, progressId, startTime) {
+            if (event.type === 'progress') {
+                updateProgressStage(progressId, event.phase, event.status, event.message, event.elapsed_ms);
+            } else if (event.type === 'complete') {
+                const clientTime = Date.now() - startTime;
+
+                const data = event.data;
+                sessionId = data.session_id;
+
+                // Add response below the progress stages (don't remove them)
+                appendResponseToProgress(progressId, data.response, data);
+
+                currentTrace = { ...data, client_time_ms: clientTime };
+                updateTracePanel();
+            } else if (event.type === 'error') {
+                // On error, show error below progress
+                appendErrorToProgress(progressId, event.message);
+            }
+            // Ignore 'keepalive' events
+        }
+
+        // Append the final response below progress stages
+        function appendResponseToProgress(progressId, response, metadata) {
+            const progressEl = document.getElementById(progressId);
+            if (!progressEl) return;
+
+            // Add a divider and the response content
+            const responseDiv = document.createElement('div');
+            responseDiv.className = 'progress-response';
+            responseDiv.innerHTML = `
+                <div class="progress-divider"></div>
+                <div class="message-content">${renderMarkdown(response)}</div>
+                ${metadata.agent_name ? `<div class="message-meta">${metadata.agent_name} · ${metadata.execution_time_ms || 0}ms · ${(metadata.confidence * 100).toFixed(0)}% confidence</div>` : ''}
+            `;
+
+            progressEl.appendChild(responseDiv);
+
+            // Scroll to show response
+            const messagesEl = document.getElementById('messages');
+            messagesEl.scrollTop = messagesEl.scrollHeight;
+        }
+
+        // Append error below progress stages
+        function appendErrorToProgress(progressId, errorMessage) {
+            const progressEl = document.getElementById(progressId);
+            if (!progressEl) return;
+
+            const errorDiv = document.createElement('div');
+            errorDiv.className = 'progress-response';
+            errorDiv.innerHTML = `
+                <div class="progress-divider"></div>
+                <div class="message-content" style="color: #f87171;">Error: ${escapeHtml(errorMessage)}</div>
+            `;
+
+            progressEl.appendChild(errorDiv);
+
+            const messagesEl = document.getElementById('messages');
+            messagesEl.scrollTop = messagesEl.scrollHeight;
+        }
+
+        // Add progress indicator with stages
+        function addProgressIndicator() {
+            const messages = document.getElementById('messages');
+            const emptyState = messages.querySelector('.empty-state');
+            if (emptyState) emptyState.remove();
+
+            const id = 'progress-' + Date.now();
+            const div = document.createElement('div');
+            div.id = id;
+            div.className = 'message assistant';
+
+            // Create initial stage (routing will start first)
+            div.innerHTML = `
+                <div class="progress-stages" id="${id}-stages">
+                    <div class="progress-stage active" data-phase="routing">
+                        <span class="stage-icon"><span class="spinner"></span></span>
+                        <span class="stage-text">Starting...</span>
+                        <span class="stage-time"></span>
+                    </div>
+                </div>
+            `;
+            messages.appendChild(div);
+            messages.scrollTop = messages.scrollHeight;
+            return id;
+        }
+
+        // Update progress stage display
+        function updateProgressStage(progressId, phase, status, message, elapsedMs) {
+            const stages = document.getElementById(`${progressId}-stages`);
+            if (!stages) return;
+
+            // Find or create stage element
+            let stageEl = stages.querySelector(`[data-phase="${phase}"]`);
+
+            if (!stageEl) {
+                // Create new stage element
+                stageEl = document.createElement('div');
+                stageEl.className = 'progress-stage';
+                stageEl.dataset.phase = phase;
+                stageEl.innerHTML = `
+                    <span class="stage-icon"><span class="spinner"></span></span>
+                    <span class="stage-text"></span>
+                    <span class="stage-time"></span>
+                `;
+                stages.appendChild(stageEl);
+            }
+
+            // Update stage content
+            const iconEl = stageEl.querySelector('.stage-icon');
+            const textEl = stageEl.querySelector('.stage-text');
+            const timeEl = stageEl.querySelector('.stage-time');
+
+            // Use custom message or default phase name
+            const config = PHASE_CONFIG[phase] || { name: phase, icon: '⚙️' };
+            textEl.textContent = message || config.name;
+
+            if (status === 'completed') {
+                stageEl.classList.remove('active');
+                stageEl.classList.add('completed');
+                iconEl.innerHTML = '<span class="check">✓</span>';
+                if (elapsedMs) {
+                    timeEl.textContent = formatTime(elapsedMs);
+                }
+            } else if (status === 'started' || status === 'running') {
+                stageEl.classList.add('active');
+                stageEl.classList.remove('completed');
+                iconEl.innerHTML = '<span class="spinner"></span>';
+                timeEl.textContent = '';
+            }
+
+            // Scroll to show latest
+            const messagesEl = document.getElementById('messages');
+            messagesEl.scrollTop = messagesEl.scrollHeight;
+        }
+
+        // Format time in ms to readable format
+        function formatTime(ms) {
+            if (ms < 1000) return `${ms}ms`;
+            return `${(ms / 1000).toFixed(1)}s`;
+        }
+
+        // Remove progress indicator
+        function removeProgressIndicator(id) {
+            const el = document.getElementById(id);
+            if (el) el.remove();
         }
 
         // Add message to chat

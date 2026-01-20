@@ -6,7 +6,7 @@ The LLM can construct SQL queries with dates, aggregations, etc. as needed.
 """
 import time
 from langgraph.prebuilt import create_react_agent
-from langchain_core.messages import SystemMessage, HumanMessage
+from langchain_core.messages import SystemMessage, HumanMessage, AIMessage
 
 from .base import BaseAgent
 from ..tools.agent_tools import get_performance_agent_tools
@@ -38,13 +38,45 @@ class PerformanceAgentSimple(BaseAgent):
 
     def get_system_prompt(self) -> str:
         """Return system prompt."""
-        from datetime import datetime
-        current_date = datetime.now().strftime("%B %Y")
-        current_year = datetime.now().year
+        from datetime import datetime, timedelta
+        now = datetime.now()
+        current_date = now.strftime("%B %d, %Y")
+        current_year = now.year
+        current_day_of_week = now.strftime("%A")  # Monday, Tuesday, etc.
+        
+        # Calculate last full reporting week (Sunday-Saturday)
+        # Find the most recent Saturday
+        days_since_saturday = (now.weekday() + 2) % 7  # Monday=0, so +2 gives days since Saturday
+        if days_since_saturday == 0:  # Today is Saturday
+            days_since_saturday = 7  # Use previous Saturday
+        last_saturday = now - timedelta(days=days_since_saturday)
+        last_sunday = last_saturday - timedelta(days=6)  # Go back 6 days to get Sunday
+        last_full_week_start = last_sunday.strftime("%Y-%m-%d")
+        last_full_week_end = last_saturday.strftime("%Y-%m-%d")
+        last_full_week_display = f"{last_sunday.strftime('%B %d')} - {last_saturday.strftime('%B %d, %Y')}"
 
         return f"""You are a DV360 Performance Agent specializing in campaign performance analysis for the Quiz advertiser.
 
-IMPORTANT: The current date is {current_date} (year {current_year}). All date references should be interpreted relative to {current_year} unless explicitly stated otherwise.
+IMPORTANT DATE CONTEXT:
+- Current date: {current_date} ({current_day_of_week})
+- Current year: {current_year}
+- Last full reporting week (Sunday-Saturday): {last_full_week_display} ({last_full_week_start} to {last_full_week_end})
+
+CRITICAL - DATE CALCULATION RULES:
+===================================
+When users ask for "last full reporting week" or "last full week Sunday-Saturday":
+- This means the MOST RECENT COMPLETED week (Sunday through Saturday)
+- Example: If today is {current_date}, the last full week is {last_full_week_display}
+- Always use: DATE >= '{last_full_week_start}' AND DATE <= '{last_full_week_end}'
+
+When users ask for "this week" or "current week":
+- This means the week that CONTAINS today (may be incomplete)
+- Calculate: Find the Sunday of the current week, use that as start date
+- End date: Use CURRENT_DATE() or today's date
+
+When users ask for "last week":
+- This means the week BEFORE the current week
+- Calculate: Last full reporting week (as defined above)
 
 CURRENCY: All spend, revenue, and financial values are in BRITISH POUNDS (GBP/£). Always display amounts with £ symbol or specify "GBP" when presenting financial data.
 
@@ -114,67 +146,95 @@ TOOL SELECTION PRIORITY:
 
 SQL QUERY GUIDELINES:
 =====================
+**CRITICAL - COLUMN NAME CASE SENSITIVITY:**
+- Snowflake is CASE-SENSITIVE for column names
+- ALL column names MUST be UPPERCASE: ADVERTISER, DATE, INSERTION_ORDER, SPEND_GBP, etc.
+- Use UPPERCASE in SELECT, GROUP BY, ORDER BY clauses
+- Aliases should also be UPPERCASE: SUM(SPEND_GBP) AS TOTAL_SPEND
+- The tool will automatically normalize to uppercase, but always use uppercase in your queries
+
 When building custom SQL queries:
 - PRIMARY: Use reports.reporting_revamp.ALL_PERFORMANCE_AGG
-- ALWAYS filter: WHERE advertiser = 'Quiz'
-- AGGREGATE to IO level: GROUP BY insertion_order
-- SNOWFLAKE SYNTAX: Use EXTRACT(MONTH FROM date), EXTRACT(YEAR FROM date)
+- ALWAYS filter: WHERE ADVERTISER = 'Quiz' (use UPPERCASE)
+- AGGREGATE to IO level: GROUP BY INSERTION_ORDER (use UPPERCASE)
+- SNOWFLAKE SYNTAX: Use EXTRACT(MONTH FROM DATE), EXTRACT(YEAR FROM DATE) (use UPPERCASE)
 - Always include ORDER BY for consistent results
 
 EXAMPLE QUERY PATTERNS:
 =======================
+**NOTE: All column names MUST be UPPERCASE in all examples below**
+
 1. "How is Quiz performing?" → Overall IO performance:
    SELECT
-       insertion_order,
-       SUM(spend_gbp) as TOTAL_SPEND,
-       SUM(impressions) as TOTAL_IMPRESSIONS,
-       SUM(clicks) as TOTAL_CLICKS,
-       SUM(total_conversions_pm) as TOTAL_CONVERSIONS,
-       SUM(total_revenue_gbp_pm) as TOTAL_REVENUE,
-       ROUND(SUM(clicks) / NULLIF(SUM(impressions), 0) * 100, 2) as CTR,
-       ROUND(SUM(total_revenue_gbp_pm) / NULLIF(SUM(spend_gbp), 0), 2) as ROAS
+       INSERTION_ORDER,
+       SUM(SPEND_GBP) AS TOTAL_SPEND,
+       SUM(IMPRESSIONS) AS TOTAL_IMPRESSIONS,
+       SUM(CLICKS) AS TOTAL_CLICKS,
+       SUM(TOTAL_CONVERSIONS_PM) AS TOTAL_CONVERSIONS,
+       SUM(TOTAL_REVENUE_GBP_PM) AS TOTAL_REVENUE,
+       ROUND(SUM(CLICKS) / NULLIF(SUM(IMPRESSIONS), 0) * 100, 2) AS CTR,
+       ROUND(SUM(TOTAL_REVENUE_GBP_PM) / NULLIF(SUM(SPEND_GBP), 0), 2) AS ROAS
    FROM reports.reporting_revamp.ALL_PERFORMANCE_AGG
-   WHERE advertiser = 'Quiz'
-   GROUP BY insertion_order
+   WHERE ADVERTISER = 'Quiz'
+   GROUP BY INSERTION_ORDER
    ORDER BY TOTAL_SPEND DESC
 
 2. "Quiz performance for January" → Filter by month:
    SELECT
-       insertion_order,
-       SUM(spend_gbp) as TOTAL_SPEND,
-       SUM(impressions) as TOTAL_IMPRESSIONS,
-       SUM(clicks) as TOTAL_CLICKS,
-       SUM(total_conversions_pm) as TOTAL_CONVERSIONS,
-       ROUND(SUM(clicks) / NULLIF(SUM(impressions), 0) * 100, 2) as CTR
+       INSERTION_ORDER,
+       SUM(SPEND_GBP) AS TOTAL_SPEND,
+       SUM(IMPRESSIONS) AS TOTAL_IMPRESSIONS,
+       SUM(CLICKS) AS TOTAL_CLICKS,
+       SUM(TOTAL_CONVERSIONS_PM) AS TOTAL_CONVERSIONS,
+       ROUND(SUM(CLICKS) / NULLIF(SUM(IMPRESSIONS), 0) * 100, 2) AS CTR
    FROM reports.reporting_revamp.ALL_PERFORMANCE_AGG
-   WHERE advertiser = 'Quiz'
-   AND EXTRACT(MONTH FROM date) = 1
-   AND EXTRACT(YEAR FROM date) = {current_year}
-   GROUP BY insertion_order
+   WHERE ADVERTISER = 'Quiz'
+   AND EXTRACT(MONTH FROM DATE) = 1
+   AND EXTRACT(YEAR FROM DATE) = {current_year}
+   GROUP BY INSERTION_ORDER
    ORDER BY TOTAL_SPEND DESC
 
-3. "Daily trend for Quiz" → Time series:
+3. "Last full reporting week Sunday-Saturday" or "last full week" → Most recent completed week:
    SELECT
-       date,
-       SUM(spend_gbp) as DAILY_SPEND,
-       SUM(impressions) as DAILY_IMPRESSIONS,
-       SUM(clicks) as DAILY_CLICKS
+       INSERTION_ORDER,
+       SUM(SPEND_GBP) AS TOTAL_SPEND,
+       SUM(IMPRESSIONS) AS TOTAL_IMPRESSIONS,
+       SUM(CLICKS) AS TOTAL_CLICKS,
+       SUM(TOTAL_CONVERSIONS_PM) AS TOTAL_CONVERSIONS,
+       SUM(TOTAL_REVENUE_GBP_PM) AS TOTAL_REVENUE,
+       ROUND(SUM(CLICKS) / NULLIF(SUM(IMPRESSIONS), 0) * 100, 2) AS CTR,
+       ROUND(SUM(TOTAL_REVENUE_GBP_PM) / NULLIF(SUM(SPEND_GBP), 0), 2) AS ROAS
    FROM reports.reporting_revamp.ALL_PERFORMANCE_AGG
-   WHERE advertiser = 'Quiz'
-   AND date >= DATEADD(day, -30, CURRENT_DATE())
-   GROUP BY date
-   ORDER BY date DESC
+   WHERE ADVERTISER = 'Quiz'
+   AND DATE >= '{last_full_week_start}'
+   AND DATE <= '{last_full_week_end}'
+   GROUP BY INSERTION_ORDER
+   ORDER BY TOTAL_SPEND DESC
+   
+   **CRITICAL**: Always use the exact dates {last_full_week_start} to {last_full_week_end} for "last full reporting week"
 
-4. "Top performing IO" → Ranked by ROAS:
+4. "Daily trend for Quiz" → Time series:
    SELECT
-       insertion_order,
-       SUM(spend_gbp) as TOTAL_SPEND,
-       SUM(total_revenue_gbp_pm) as TOTAL_REVENUE,
-       ROUND(SUM(total_revenue_gbp_pm) / NULLIF(SUM(spend_gbp), 0), 2) as ROAS
+       DATE,
+       SUM(SPEND_GBP) AS DAILY_SPEND,
+       SUM(IMPRESSIONS) AS DAILY_IMPRESSIONS,
+       SUM(CLICKS) AS DAILY_CLICKS
    FROM reports.reporting_revamp.ALL_PERFORMANCE_AGG
-   WHERE advertiser = 'Quiz'
-   GROUP BY insertion_order
-   HAVING SUM(spend_gbp) > 0
+   WHERE ADVERTISER = 'Quiz'
+   AND DATE >= DATEADD(day, -30, CURRENT_DATE())
+   GROUP BY DATE
+   ORDER BY DATE DESC
+
+5. "Top performing IO" → Ranked by ROAS:
+   SELECT
+       INSERTION_ORDER,
+       SUM(SPEND_GBP) AS TOTAL_SPEND,
+       SUM(TOTAL_REVENUE_GBP_PM) AS TOTAL_REVENUE,
+       ROUND(SUM(TOTAL_REVENUE_GBP_PM) / NULLIF(SUM(SPEND_GBP), 0), 2) AS ROAS
+   FROM reports.reporting_revamp.ALL_PERFORMANCE_AGG
+   WHERE ADVERTISER = 'Quiz'
+   GROUP BY INSERTION_ORDER
+   HAVING SUM(SPEND_GBP) > 0
    ORDER BY ROAS DESC
 
 RESPONSE FORMAT:
@@ -200,16 +260,48 @@ Be data-driven, precise with DV360 terminology, and provide clear actionable ins
             tools=tools
         )
 
-        # Run agent with system prompt in initial messages
-        result = await react_agent.ainvoke({
-            "messages": [
-                SystemMessage(content=self.get_system_prompt()),
-                HumanMessage(content=input_data.message)
-            ]
-        })
+        # Build messages with conversation history if available
+        messages = [SystemMessage(content=self.get_system_prompt())]
+        
+        # Add conversation history for context
+        conversation_history = input_data.context.get("conversation_history", []) if input_data.context else []
+        if conversation_history:
+            # Add previous messages for context (last 10 messages to avoid token limits)
+            for msg in conversation_history[-10:]:  # Last 10 messages (5 user + 5 assistant pairs)
+                role = msg.get("role", "")
+                content = msg.get("content", "")
+                if role == "user":
+                    messages.append(HumanMessage(content=f"[Previous] {content}"))
+                elif role == "assistant":
+                    messages.append(AIMessage(content=f"[Previous Response] {content}"))
+        
+        # Add current query
+        messages.append(HumanMessage(content=input_data.message))
 
-        # Extract response from messages
-        response_text = self._extract_response(result.get("messages", []))
+        # Run agent with system prompt and conversation history
+        # Set recursion_limit in config to prevent infinite retry loops
+        from langchain_core.runnables import RunnableConfig
+        config = RunnableConfig(recursion_limit=15)  # Limit retries to prevent infinite loops
+        
+        try:
+            result = await react_agent.ainvoke({"messages": messages}, config=config)
+            
+            # Extract response from messages
+            response_text = self._extract_response(result.get("messages", []))
+            
+            # Check if max_iterations was reached (indicated by specific message pattern)
+            if not response_text or "max iterations" in response_text.lower() or "maximum iterations" in response_text.lower():
+                response_text = (
+                    "I encountered an issue executing the query after multiple attempts. "
+                    "This may be due to a SQL syntax error or data access issue. "
+                    "Please try rephrasing your question or check if the requested data is available."
+                )
+        except Exception as e:
+            logger.error("ReAct agent execution failed", error=str(e))
+            response_text = (
+                f"I encountered an error while processing your request: {str(e)}. "
+                "Please try rephrasing your question or contact support if the issue persists."
+            )
 
         # Log decision
         execution_time_ms = int((time.time() - start_time) * 1000)

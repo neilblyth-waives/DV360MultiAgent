@@ -28,7 +28,7 @@ class RecommendationAgent:
         self.llm = ChatAnthropic(
             model=settings.anthropic_model,
             api_key=settings.anthropic_api_key,
-            temperature=0.4,  # Slightly creative for varied recommendations
+            temperature=0.3,  # Lower temperature for faster, more consistent recommendations
         )
 
     async def generate_recommendations(
@@ -57,40 +57,42 @@ class RecommendationAgent:
         root_causes = diagnosis.get("root_causes", [])
         severity = diagnosis.get("severity", "medium")
         correlations = diagnosis.get("correlations", [])
+        diagnosis_summary = diagnosis.get("summary", "")
 
-        # Build prompt
+        # Include key agent results for context (but keep it concise)
+        agent_context = ""
+        if agent_results:
+            agent_summaries = []
+            for agent_name, output in list(agent_results.items())[:2]:  # Limit to 2 agents for speed
+                if hasattr(output, 'response') and output.response:
+                    # Truncate to first 300 chars per agent to keep prompt short
+                    response_preview = output.response[:300] + "..." if len(output.response) > 300 else output.response
+                    agent_summaries.append(f"{agent_name}: {response_preview}")
+            if agent_summaries:
+                agent_context = f"\n\nAgent Findings:\n" + "\n".join(f"- {s}" for s in agent_summaries)
+
+        # Build prompt (more concise for faster generation)
         recommendation_prompt = f"""You are a recommendation agent generating actionable recommendations for DV360 campaign optimization.
 
 User Query: "{query}"
 
-Diagnosis Summary:
+Diagnosis:
 - Severity: {severity}
-- Root Causes: {', '.join(root_causes) if root_causes else 'None identified'}
-- Correlations: {', '.join(correlations) if correlations else 'None identified'}
+- Root Causes: {', '.join(root_causes[:5]) if root_causes else 'None identified'}{agent_context}
 
-Your task:
-Generate 3-5 prioritized, actionable recommendations that:
-1. Address the root causes (not just symptoms)
-2. Are specific and implementable
-3. Have clear expected impact
-4. Are prioritized by urgency/impact
+Task: Generate 3-4 prioritized, actionable recommendations that address root causes.
 
-Respond in this format:
-
+Format:
 RECOMMENDATION 1:
 Priority: [high/medium/low]
-Action: [Specific action to take]
-Reason: [Why this will help]
-Expected Impact: [What will improve]
+Action: [Specific action]
+Reason: [Why this helps]
+Expected Impact: [What improves]
 
-RECOMMENDATION 2:
-...
+(Continue for 3-4 recommendations)
 
-(Continue for 3-5 recommendations)
-
-CONFIDENCE: [0.0-1.0 confidence score]
-
-ACTION_PLAN: [2-3 sentence summary of the overall action plan]
+CONFIDENCE: [0.0-1.0]
+ACTION_PLAN: [2-3 sentence summary]
 
 Your recommendations:"""
 

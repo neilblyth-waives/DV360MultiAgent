@@ -4,7 +4,7 @@ Diagnosis Agent - Analyzes results from multiple agents to find root causes.
 This agent takes outputs from specialist agents and identifies patterns,
 correlations, and root causes across different perspectives.
 """
-from typing import Dict, Any, List
+from typing import Dict, Any, List, Optional
 from langchain_core.messages import SystemMessage, HumanMessage
 from langchain_anthropic import ChatAnthropic
 
@@ -34,7 +34,9 @@ class DiagnosisAgent:
     async def diagnose(
         self,
         agent_results: Dict[str, Any],
-        query: str
+        query: str,
+        conversation_history: Optional[List[Dict[str, Any]]] = None,
+        gate_warnings: Optional[List[str]] = None
     ) -> Dict[str, Any]:
         """
         Analyze results from multiple agents.
@@ -42,6 +44,8 @@ class DiagnosisAgent:
         Args:
             agent_results: Dict of {agent_name: AgentOutput}
             query: Original user query
+            conversation_history: Optional list of previous messages for context
+            gate_warnings: Optional list of warnings from gate validation
 
         Returns:
             Dict with:
@@ -68,11 +72,36 @@ class DiagnosisAgent:
             }
             all_issues.extend(self._extract_issues_from_response(output.response))
 
+        # Build context section
+        context_sections = []
+        
+        # Add conversation history if available (truncated to last 3 messages for relevance)
+        if conversation_history:
+            recent_history = conversation_history[-3:] if len(conversation_history) > 3 else conversation_history
+            context_sections.append("CONVERSATION CONTEXT (recent messages):")
+            for msg in recent_history:
+                role = msg.get("role", "")
+                content = msg.get("content", "")
+                # Truncate long messages
+                if len(content) > 200:
+                    content = content[:200] + "..."
+                context_sections.append(f"- {role.upper()}: {content}")
+        
+        # Add gate warnings if available
+        if gate_warnings:
+            context_sections.append(f"\nGATE VALIDATION WARNINGS:")
+            for warning in gate_warnings:
+                context_sections.append(f"- {warning}")
+        
+        context_text = "\n".join(context_sections) if context_sections else "None"
+
         # Use LLM for diagnosis
         # Format agent results for better readability (full responses included)
         diagnosis_prompt = f"""You are a diagnosis agent analyzing results from multiple DV360 specialist agents.
 
 User Query: "{query}"
+
+{context_text}
 
 Agent Results (Full Responses):
 {json.dumps(agent_summaries, indent=2, ensure_ascii=False)}

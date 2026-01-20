@@ -6,7 +6,7 @@ The LLM can construct SQL queries with dates, aggregations, etc. as needed.
 """
 import time
 from langgraph.prebuilt import create_react_agent
-from langchain_core.messages import SystemMessage, HumanMessage
+from langchain_core.messages import SystemMessage, HumanMessage, AIMessage
 
 from .base import BaseAgent
 from ..tools.agent_tools import get_audience_agent_tools
@@ -236,13 +236,30 @@ Be data-driven, precise with DV360 terminology, and provide clear actionable ins
             tools=tools
         )
 
-        # Run agent with system prompt in initial messages
-        result = await react_agent.ainvoke({
-            "messages": [
-                SystemMessage(content=self.get_system_prompt()),
-                HumanMessage(content=input_data.message)
-            ]
-        })
+        # Build messages with conversation history if available
+        messages = [SystemMessage(content=self.get_system_prompt())]
+        
+        # Add conversation history for context
+        conversation_history = input_data.context.get("conversation_history", []) if input_data.context else []
+        if conversation_history:
+            # Add previous messages for context (last 10 messages to avoid token limits)
+            for msg in conversation_history[-10:]:
+                role = msg.get("role", "")
+                content = msg.get("content", "")
+                if role == "user":
+                    messages.append(HumanMessage(content=f"[Previous] {content}"))
+                elif role == "assistant":
+                    messages.append(AIMessage(content=f"[Previous Response] {content}"))
+        
+        # Add current query
+        messages.append(HumanMessage(content=input_data.message))
+
+        # Run agent with system prompt and conversation history
+        # Set recursion_limit in config to prevent infinite retry loops
+        from langchain_core.runnables import RunnableConfig
+        config = RunnableConfig(recursion_limit=15)  # Limit retries to prevent infinite loops
+        
+        result = await react_agent.ainvoke({"messages": messages}, config=config)
 
         # Extract response from messages
         response_text = self._extract_response(result.get("messages", []))

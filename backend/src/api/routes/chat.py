@@ -1,7 +1,12 @@
 """
 Chat API endpoints for interacting with the agent system.
 """
+import asyncio
+import json
+import time
+
 from fastapi import APIRouter, HTTPException, status
+from fastapi.responses import StreamingResponse
 from pydantic import BaseModel, Field
 from typing import List, Optional, Dict, Any
 from uuid import UUID
@@ -10,7 +15,7 @@ from datetime import datetime
 from ...agents.orchestrator import orchestrator
 from ...memory.session_manager import session_manager
 from ...schemas.agent import AgentInput
-from ...schemas.chat import ChatMessage, SessionInfo, SessionCreate
+from ...schemas.chat import ChatMessage, ChatMessageCreate, SessionInfo, SessionCreate
 from ...core.telemetry import get_logger
 
 
@@ -83,6 +88,15 @@ async def send_message(request: ChatRequest):
             )
             logger.info(f"Created new session: {session_id}")
 
+        # Save user message to history
+        await session_manager.add_message(ChatMessageCreate(
+            session_id=session_id,
+            role="user",
+            content=request.message,
+            agent_name=None,
+            metadata={}
+        ))
+
         # Process message through orchestrator (RouteFlow architecture)
         agent_input = AgentInput(
             message=request.message,
@@ -96,6 +110,15 @@ async def send_message(request: ChatRequest):
 
         # Calculate execution time
         execution_time_ms = int((time.time() - start_time) * 1000)
+
+        # Save assistant response to history
+        await session_manager.add_message(ChatMessageCreate(
+            session_id=session_id,
+            role="assistant",
+            content=output.response,
+            agent_name=output.agent_name,
+            metadata={"confidence": output.confidence, "execution_time_ms": execution_time_ms}
+        ))
 
         logger.info(
             "Chat request processed",
@@ -123,6 +146,164 @@ async def send_message(request: ChatRequest):
             status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
             detail=f"Failed to process message: {str(e)}"
         )
+
+
+@router.post("/stream", status_code=status.HTTP_200_OK)
+async def send_message_stream(request: ChatRequest):
+    """
+    Send a message with real-time progress streaming via Server-Sent Events (SSE).
+
+    Returns SSE events with progress updates during processing:
+    - progress events: {"type": "progress", "phase": "...", "status": "...", "message": "..."}
+    - complete event: {"type": "complete", "data": {...}}
+    - error event: {"type": "error", "message": "..."}
+
+    This endpoint provides real-time visibility into the orchestrator phases:
+    routing, gate, invoke_agents, diagnosis, recommendation, validation, generate_response
+
+    Args:
+        request: Chat request with message, session_id, and user_id
+
+    Returns:
+        StreamingResponse with SSE events
+    """
+    start_time = time.time()
+
+    async def event_generator():
+        progress_queue: asyncio.Queue = asyncio.Queue()
+        session_id = None
+
+        async def progress_callback(phase: str, status: str, details: Dict[str, Any]):
+            """Called by orchestrator to emit progress events."""
+            elapsed_ms = int((time.time() - start_time) * 1000)
+            event = {
+                "type": "progress",
+                "phase": phase,
+                "status": status,
+                "message": details.get("message", f"{phase}: {status}"),
+                "details": details,
+                "elapsed_ms": elapsed_ms
+            }
+            await progress_queue.put(event)
+
+        async def run_orchestrator():
+            """Run orchestrator and put final result in queue."""
+            nonlocal session_id
+            try:
+                # Create or use existing session
+                if request.session_id:
+                    session = await session_manager.get_session_info(request.session_id)
+                    if not session:
+                        await progress_queue.put({
+                            "type": "error",
+                            "message": f"Session {request.session_id} not found"
+                        })
+                        return
+                    session_id = request.session_id
+                else:
+                    session_id = await session_manager.create_session(
+                        user_id=request.user_id,
+                        metadata=request.context
+                    )
+                    logger.info(f"Created new session for streaming: {session_id}")
+
+                # Save user message to history
+                await session_manager.add_message(ChatMessageCreate(
+                    session_id=session_id,
+                    role="user",
+                    content=request.message,
+                    agent_name=None,
+                    metadata={}
+                ))
+
+                # Create agent input
+                agent_input = AgentInput(
+                    message=request.message,
+                    session_id=session_id,
+                    user_id=request.user_id,
+                    context=request.context,
+                )
+
+                # Invoke orchestrator with progress callbacks
+                output = await orchestrator.invoke_with_progress(agent_input, progress_callback)
+
+                execution_time_ms = int((time.time() - start_time) * 1000)
+
+                # Save assistant response to history
+                await session_manager.add_message(ChatMessageCreate(
+                    session_id=session_id,
+                    role="assistant",
+                    content=output.response,
+                    agent_name=output.agent_name,
+                    metadata={"confidence": output.confidence, "execution_time_ms": execution_time_ms}
+                ))
+
+                logger.info(
+                    "Streaming chat request completed",
+                    session_id=str(session_id),
+                    user_id=request.user_id,
+                    execution_time_ms=execution_time_ms,
+                )
+
+                # Send complete event
+                await progress_queue.put({
+                    "type": "complete",
+                    "data": {
+                        "response": output.response,
+                        "session_id": str(session_id),
+                        "agent_name": output.agent_name,
+                        "reasoning": output.reasoning,
+                        "tools_used": output.tools_used,
+                        "confidence": output.confidence,
+                        "metadata": output.metadata,
+                        "execution_time_ms": execution_time_ms
+                    }
+                })
+
+            except Exception as e:
+                logger.error("Streaming chat request failed", error_message=str(e))
+                await progress_queue.put({
+                    "type": "error",
+                    "message": f"Failed to process message: {str(e)}"
+                })
+
+        # Start orchestrator in background task
+        task = asyncio.create_task(run_orchestrator())
+
+        # Yield SSE events as they arrive
+        try:
+            while True:
+                try:
+                    # Wait for next event with timeout (for keepalive)
+                    event = await asyncio.wait_for(progress_queue.get(), timeout=30.0)
+                    yield f"data: {json.dumps(event)}\n\n"
+
+                    # Stop if complete or error
+                    if event.get("type") in ("complete", "error"):
+                        break
+
+                except asyncio.TimeoutError:
+                    # Send keepalive to prevent connection timeout
+                    yield f"data: {json.dumps({'type': 'keepalive'})}\n\n"
+
+        finally:
+            # Ensure task completes
+            if not task.done():
+                task.cancel()
+                try:
+                    await task
+                except asyncio.CancelledError:
+                    pass
+
+    return StreamingResponse(
+        event_generator(),
+        media_type="text/event-stream",
+        headers={
+            "Cache-Control": "no-cache",
+            "Connection": "keep-alive",
+            "X-Accel-Buffering": "no",  # Disable nginx/proxy buffering
+        }
+    )
 
 
 @router.post("/sessions", response_model=SessionInfo, status_code=status.HTTP_201_CREATED)

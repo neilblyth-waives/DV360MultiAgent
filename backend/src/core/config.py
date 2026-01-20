@@ -56,7 +56,8 @@ class Settings(BaseSettings):
 
     # LLM Provider - Anthropic
     anthropic_api_key: Optional[str] = Field(default=None, description="Anthropic API key")
-    anthropic_model: str = Field(default="claude-3-5-haiku-20241022", description="Anthropic model - Claude 3.5 Haiku (fast + smart)")
+    # anthropic_model: str = Field(default="claude-3-5-haiku-20241022", description="Anthropic model - Claude 3.5 Haiku (fast + smart)")
+    anthropic_model: str = Field(default="claude-haiku-4-5-20251001", description="Anthropic model - Claude 4.5 Haiku (fast + smart)")
 
     # LangSmith
     langchain_tracing_v2: bool = Field(default=False, description="Enable LangSmith tracing")

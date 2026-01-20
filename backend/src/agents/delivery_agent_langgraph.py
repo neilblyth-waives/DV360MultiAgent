@@ -381,7 +381,11 @@ Call the tools now to collect the data.""")
                 ]
             }
 
-            result = react_agent.invoke(agent_input)
+            # Set recursion_limit in config to prevent infinite retry loops
+            from langchain_core.runnables import RunnableConfig
+            config = RunnableConfig(recursion_limit=15)  # Limit retries to prevent infinite loops
+            
+            result = react_agent.invoke(agent_input, config=config)
 
             # Extract data from tool results
             # The ReAct agent's tool calls will be in the messages

@@ -52,20 +52,11 @@ class GateNode:
         valid = True
         reason = "Validation passed"
 
-        # Rule 1: Check query length
+        # Rule 1: Check query length (just warn, don't block - let clarification flow handle it)
         words = query.split()
         if len(words) < self.min_query_length:
             warnings.append(f"Query is very short ({len(words)} words)")
-            # Don't block, but warn
-            if routing_confidence < 0.6:
-                valid = False
-                reason = "Query too vague and routing confidence low"
-                logger.warning(
-                    "Gate blocked query",
-                    query=query[:50],
-                    word_count=len(words),
-                    confidence=routing_confidence
-                )
+            # Don't block - the routing agent will handle clarification if needed
 
         # Rule 2: Check number of agents
         if len(selected_agents) > self.max_agents:
@@ -90,10 +81,11 @@ class GateNode:
             invalid_agents = [a for a in selected_agents if a not in valid_agent_names]
             warnings.append(f"Invalid agent names removed: {', '.join(invalid_agents)}")
 
-        # Rule 5: Ensure at least one agent
+        # Rule 5: Check if agents were selected
+        # If no agents selected, the routing agent has requested clarification - let it through
         if not approved_agents:
-            warnings.append("No valid agents selected, defaulting to performance_diagnosis")
-            approved_agents = ["performance_diagnosis"]
+            warnings.append("No agents selected - clarification may be needed")
+            # Don't default to an agent - let the clarification flow handle it
 
         logger.info(
             "Gate validation complete",

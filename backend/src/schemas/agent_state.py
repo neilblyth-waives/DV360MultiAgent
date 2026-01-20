@@ -61,12 +61,15 @@ class OrchestratorState(TypedDict):
 
     # Context
     session_history: List[Dict[str, Any]]
+    conversation_history: List[Dict[str, Any]]  # Recent conversation messages for context
     relevant_learnings: List[Dict[str, Any]]
 
     # Routing phase
     routing_decision: Dict[str, Any]  # From routing_agent
     routing_confidence: float
     selected_agents: List[str]
+    clarification_needed: bool  # Whether query needs clarification
+    clarification_message: Optional[str]  # Message to show user for clarification
 
     # Gate phase
     gate_result: Dict[str, Any]  # Validation result
@@ -437,10 +440,13 @@ def create_initial_orchestrator_state(
         session_id=session_id,
         user_id=user_id,
         session_history=[],
+        conversation_history=[],
         relevant_learnings=[],
         routing_decision={},
         routing_confidence=0.0,
         selected_agents=[],
+        clarification_needed=False,
+        clarification_message=None,
         gate_result={},
         approved_agents=[],
         gate_warnings=[],

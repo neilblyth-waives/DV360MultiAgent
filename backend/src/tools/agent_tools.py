@@ -17,7 +17,6 @@ from .memory_tools import (
     ALL_MEMORY_TOOLS,
 )
 
-
 # Tool collections by category
 SNOWFLAKE_TOOLS = ALL_SNOWFLAKE_TOOLS
 MEMORY_TOOLS = ALL_MEMORY_TOOLS
@@ -104,25 +103,3 @@ AGENT_TOOL_REGISTRY = {
     "creative_inventory": get_creative_agent_tools,
     "delivery_optimization": get_delivery_agent_tools,
 }
-
-
-def get_tools_for_agent(agent_name: str) -> List[BaseTool]:
-    """
-    Get the appropriate tool set for a given agent.
-
-    Args:
-        agent_name: Name of the agent
-
-    Returns:
-        List of tools available to that agent
-
-    Raises:
-        KeyError: If agent name not recognized
-    """
-    if agent_name not in AGENT_TOOL_REGISTRY:
-        raise KeyError(
-            f"Unknown agent: {agent_name}. "
-            f"Available agents: {list(AGENT_TOOL_REGISTRY.keys())}"
-        )
-
-    return AGENT_TOOL_REGISTRY[agent_name]()

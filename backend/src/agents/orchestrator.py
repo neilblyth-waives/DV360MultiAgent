@@ -5,16 +5,20 @@ This orchestrator replaces the Chat Conductor and implements the full
 RouteFlow architecture with routing, gate, diagnosis, early exit,
 recommendation, and validation phases.
 """
-from typing import Dict, Any
+from typing import Dict, Any, Callable, Awaitable, Optional
 from uuid import UUID
 import time
 import asyncio
 
 from langgraph.graph import StateGraph, END
 
+# Type alias for progress callback
+ProgressCallback = Callable[[str, str, Dict[str, Any]], Awaitable[None]]
+
 from .base import BaseAgent
 from .routing_agent import routing_agent
 from .gate_node import gate_node
+from ..memory.session_manager import session_manager
 from .diagnosis_agent import diagnosis_agent
 from .early_exit_node import early_exit_node
 from .recommendation_agent import recommendation_agent
@@ -72,6 +76,10 @@ class Orchestrator(BaseAgent):
         # Build LangGraph
         self.graph = self._build_graph()
 
+        # Progress callback (set during invoke_with_progress)
+        self._progress_callback: Optional[ProgressCallback] = None
+        self._start_time: float = 0
+
     def get_system_prompt(self) -> str:
         """Return system prompt."""
         from datetime import datetime
@@ -98,8 +106,15 @@ IMPORTANT: The current date is {current_date} (year {current_year}). All date re
         # Set entry point
         workflow.set_entry_point("routing")
 
-        # Flow
-        workflow.add_edge("routing", "gate")
+        # Conditional: routing can go to gate (normal) or generate_response (clarification needed)
+        workflow.add_conditional_edges(
+            "routing",
+            self._routing_decision,
+            {
+                "clarify": "generate_response",  # Skip to response for clarification
+                "proceed": "gate"  # Normal flow
+            }
+        )
 
         # Conditional: gate validates or blocks
         workflow.add_conditional_edges(
@@ -129,32 +144,114 @@ IMPORTANT: The current date is {current_date} (year {current_year}). All date re
 
         return workflow.compile()
 
+    def _routing_decision(self, state: OrchestratorState) -> str:
+        """Decision: proceed to gate or skip to clarification response?"""
+        if state.get("clarification_needed", False):
+            logger.info("Routing decision: clarification needed, skipping to response")
+            return "clarify"
+        else:
+            logger.info("Routing decision: proceeding to gate")
+            return "proceed"
+
     async def _routing_node(self, state: OrchestratorState) -> Dict[str, Any]:
         """Route query to appropriate specialist agents."""
         query = state["query"]
+        session_id = state.get("session_id")
 
         logger.info("Routing query", query=query[:50])
 
-        # Use routing agent
-        routing_result = await routing_agent.route(query)
+        # Emit progress: started
+        await self._emit_progress("routing", "started", {"message": "Routing query to specialist agents..."})
+
+        # Fetch recent conversation history for context (excluding current query)
+        conversation_history = []
+        if session_id:
+            try:
+                messages = await session_manager.get_messages(session_id, limit=10)
+                # Only include history if there are previous messages (not just the current one)
+                # Filter out any messages that match the current query (it might be saved already)
+                if len(messages) > 1:  # More than just the current message
+                    # Exclude messages that match the current query
+                    filtered_messages = [
+                        msg for msg in messages
+                        if msg.content != query  # Exclude current query if it's already saved
+                    ]
+                    conversation_history = [
+                        {"role": msg.role, "content": msg.content}
+                        for msg in filtered_messages
+                    ]
+                # If only 1 message exists, it's likely the current query, so no history
+                logger.info("Fetched conversation history", message_count=len(conversation_history), total_messages=len(messages))
+            except Exception as e:
+                logger.warning("Failed to fetch conversation history", error=str(e))
+
+        # Use routing agent with conversation context
+        routing_result = await routing_agent.route(query, conversation_history=conversation_history)
+
+        # Check if clarification is needed
+        if routing_result.get("clarification_needed", False):
+            logger.info("Routing requires clarification", query=query[:50])
+            
+            await self._emit_progress("routing", "completed", {
+                "message": "Query unclear - requesting clarification",
+                "clarification_needed": True
+            })
+
+            return {
+                "routing_decision": routing_result,
+                "routing_confidence": 0.0,
+                "selected_agents": [],
+                "clarification_needed": True,
+                "clarification_message": routing_result.get("clarification_message", "Could you please clarify your question?"),
+                "reasoning_steps": [
+                    "Routing: Query unclear, requesting clarification"
+                ]
+            }
+
+        selected = routing_result.get("selected_agents", [])
+
+        # Emit progress: completed
+        await self._emit_progress("routing", "completed", {
+            "message": f"Selected: {', '.join(selected)}" if selected else "No agents selected",
+            "agents": selected,
+            "confidence": routing_result.get("confidence", 0.0)
+        })
 
         return {
             "routing_decision": routing_result,
             "routing_confidence": routing_result.get("confidence", 0.0),
-            "selected_agents": routing_result.get("selected_agents", []),
+            "selected_agents": selected,
+            "clarification_needed": False,
+            "conversation_history": conversation_history,  # Store for later nodes
             "reasoning_steps": [
-                f"Routing: selected {', '.join(routing_result.get('selected_agents', []))} "
+                f"Routing: selected {', '.join(selected)} "
                 f"with confidence {routing_result.get('confidence', 0.0):.2f}"
             ]
         }
 
-    def _gate_node(self, state: OrchestratorState) -> Dict[str, Any]:
+    async def _gate_node(self, state: OrchestratorState) -> Dict[str, Any]:
         """Validate routing decision."""
+        # Skip gate validation if clarification is needed
+        if state.get("clarification_needed", False):
+            logger.info("Gate skipped - clarification needed")
+            return {
+                "gate_result": {
+                    "valid": False,
+                    "reason": "Clarification needed",
+                    "approved_agents": [],
+                    "warnings": []
+                },
+                "reasoning_steps": ["Gate: Skipped - clarification needed"]
+            }
+        
         query = state["query"]
         selected_agents = state["selected_agents"]
         routing_confidence = state["routing_confidence"]
 
         logger.info("Gate validation", selected_agents=selected_agents)
+
+        # Emit progress: started
+        await self._emit_progress("gate", "started", {"message": "Validating request..."})
 
         # Use gate node
         gate_result = gate_node.validate(
@@ -164,11 +261,20 @@ IMPORTANT: The current date is {current_date} (year {current_year}). All date re
             user_id=state["user_id"]
         )
 
+        approved = gate_result.get('approved_agents', [])
+        warnings = gate_result.get('warnings', [])
+
+        # Emit progress: completed
+        await self._emit_progress("gate", "completed", {
+            "message": f"Validated: {len(approved)} agent(s) approved" if gate_result.get("valid") else "Request blocked",
+            "approved_agents": approved,
+            "warnings": warnings
+        })
+
         return {
             "gate_result": gate_result,
             "reasoning_steps": [
-                f"Gate: approved {len(gate_result.get('approved_agents', []))} agents, "
-                f"{len(gate_result.get('warnings', []))} warnings"
+                f"Gate: approved {len(approved)} agents, {len(warnings)} warnings"
             ]
         }
 
@@ -194,6 +300,34 @@ IMPORTANT: The current date is {current_date} (year {current_year}). All date re
 
         logger.info("Invoking agents", agents=approved_agents)
 
+        # Emit progress: started
+        await self._emit_progress("invoke_agents", "started", {
+            "message": f"Running {len(approved_agents)} agent(s)...",
+            "agents": approved_agents
+        })
+
+        # Fetch conversation history for context (excluding current query)
+        conversation_history = []
+        if session_id:
+            try:
+                messages = await session_manager.get_messages(session_id, limit=10)
+                # Only include history if there are previous messages (not just the current one)
+                # Filter out any messages that match the current query (it might be saved already)
+                if len(messages) > 1:  # More than just the current message
+                    # Exclude messages that match the current query
+                    filtered_messages = [
+                        msg for msg in messages
+                        if msg.content != query  # Exclude current query if it's already saved
+                    ]
+                    conversation_history = [
+                        {"role": msg.role, "content": msg.content}
+                        for msg in filtered_messages
+                    ]
+                # If only 1 message exists, it's likely the current query, so no history
+                logger.info("Fetched conversation history for agents", message_count=len(conversation_history), total_messages=len(messages))
+            except Exception as e:
+                logger.warning("Failed to fetch conversation history for agents", error=str(e))
+
         agent_results = {}
         agent_errors = {}
 
@@ -205,11 +339,21 @@ IMPORTANT: The current date is {current_date} (year {current_year}). All date re
                 continue
 
             try:
-                # Create agent input
+                # Emit progress: running this agent
+                await self._emit_progress("invoke_agents", "running", {
+                    "message": f"Running {agent_name}...",
+                    "current_agent": agent_name
+                })
+
+                # Create agent input with conversation history
                 agent_input = AgentInput(
                     message=query,
                     session_id=session_id,
-                    user_id=user_id
+                    user_id=user_id,
+                    context={
+                        "conversation_history": conversation_history,
+                        "routing_decision": state.get("routing_decision", {})
+                    }
                 )
 
                 # Invoke agent
@@ -218,9 +362,23 @@ IMPORTANT: The current date is {current_date} (year {current_year}). All date re
 
                 logger.info(f"Agent {agent_name} completed", confidence=agent_output.confidence)
 
+                # Emit progress: agent completed
+                await self._emit_progress("invoke_agents", "running", {
+                    "message": f"Completed {agent_name}",
+                    "completed_agent": agent_name,
+                    "confidence": agent_output.confidence
+                })
+
             except Exception as e:
                 logger.error(f"Agent {agent_name} failed", error_message=str(e))
                 agent_errors[agent_name] = str(e)
+
+        # Emit progress: all agents completed
+        await self._emit_progress("invoke_agents", "completed", {
+            "message": f"All {len(agent_results)} agent(s) completed",
+            "agents_invoked": list(agent_results.keys()),
+            "errors": list(agent_errors.keys()) if agent_errors else []
+        })
 
         return {
             "agent_results": agent_results,
@@ -238,15 +396,68 @@ IMPORTANT: The current date is {current_date} (year {current_year}). All date re
         gate_result = state.get("gate_result", {})
         approved_agents = gate_result.get("approved_agents", [])
 
-        # Optimization: Skip diagnosis for single-agent informational queries
-        # Diagnosis is valuable for multi-agent scenarios but adds overhead for simple queries
-        if len(approved_agents) == 1 and self._is_informational_query(query):
-            logger.info("Skipping diagnosis for single-agent informational query")
+        # Skip diagnosis for follow-up queries (answers to clarification questions)
+        follow_up_phrases = ["yes i do", "yes", "no", "that one", "the first", "the second", "re run", "point 1"]
+        is_follow_up = any(phrase in query.lower() for phrase in follow_up_phrases)
+        
+        if is_follow_up and len(approved_agents) == 1:
+            logger.info("Skipping diagnosis for follow-up query", query=query[:50])
+            
+            # Emit progress: skipped
+            await self._emit_progress("diagnosis", "completed", {
+                "message": "Diagnosis skipped (follow-up query)",
+                "skipped": True
+            })
             
             # Use agent response directly as diagnosis summary
             agent_name = approved_agents[0]
             agent_output = agent_results.get(agent_name)
             
+            if agent_output:
+                diagnosis = {
+                    "summary": agent_output.response,
+                    "severity": "low",
+                    "root_causes": [],
+                    "correlations": [],
+                    "issues": [],
+                    "raw_response": None
+                }
+            else:
+                diagnosis = {
+                    "summary": "Query processed successfully",
+                    "severity": "low",
+                    "root_causes": [],
+                    "correlations": [],
+                    "issues": [],
+                    "raw_response": None
+                }
+            
+            return {
+                "diagnosis": diagnosis,
+                "correlations": [],
+                "severity_assessment": "low",
+                "reasoning_steps": ["Diagnosis skipped: Follow-up query"]
+            }
+
+        # Optimization: Skip diagnosis for single-agent informational queries
+        # Diagnosis is valuable for multi-agent scenarios but adds overhead for simple queries
+        if len(approved_agents) == 1 and self._is_informational_query(query):
+            logger.info(
+                "Skipping diagnosis for single-agent informational query",
+                agent=approved_agents[0],
+                query=query[:50]
+            )
+
+            # Emit progress: skipped
+            await self._emit_progress("diagnosis", "completed", {
+                "message": "Diagnosis skipped (informational query)",
+                "skipped": True
+            })
+
+            # Use agent response directly as diagnosis summary
+            agent_name = approved_agents[0]
+            agent_output = agent_results.get(agent_name)
+
             if agent_output:
                 diagnosis = {
                     "summary": agent_output.response,
@@ -266,7 +477,7 @@ IMPORTANT: The current date is {current_date} (year {current_year}). All date re
                     "issues": [],
                     "raw_response": None
                 }
-            
+
             return {
                 "diagnosis": diagnosis,
                 "correlations": [],
@@ -278,8 +489,27 @@ IMPORTANT: The current date is {current_date} (year {current_year}). All date re
 
         logger.info("Running diagnosis")
 
+        # Emit progress: started
+        await self._emit_progress("diagnosis", "started", {"message": "Analyzing results..."})
+
+        # Get conversation history and gate warnings for context
+        conversation_history = state.get("conversation_history", [])
+        gate_warnings = gate_result.get("warnings", [])
+
         # Use diagnosis agent for multi-agent or complex queries
-        diagnosis = await diagnosis_agent.diagnose(agent_results, query)
+        diagnosis = await diagnosis_agent.diagnose(
+            agent_results, 
+            query,
+            conversation_history=conversation_history,
+            gate_warnings=gate_warnings
+        )
+
+        # Emit progress: completed
+        await self._emit_progress("diagnosis", "completed", {
+            "message": f"Analysis complete: {diagnosis.get('severity', 'unknown')} severity",
+            "severity": diagnosis.get("severity"),
+            "root_causes_count": len(diagnosis.get("root_causes", []))
+        })
 
         return {
             "diagnosis": diagnosis,
@@ -349,21 +579,33 @@ IMPORTANT: The current date is {current_date} (year {current_year}). All date re
 
         logger.info("Generating recommendations")
 
+        # Emit progress: started
+        await self._emit_progress("recommendation", "started", {"message": "Generating recommendations..."})
+
         # Use recommendation agent
         rec_result = await recommendation_agent.generate_recommendations(
             diagnosis, agent_results, query
         )
 
+        recommendations = rec_result.get("recommendations", [])
+
+        # Emit progress: completed
+        await self._emit_progress("recommendation", "completed", {
+            "message": f"Generated {len(recommendations)} recommendation(s)",
+            "count": len(recommendations),
+            "confidence": rec_result.get("confidence", 0.0)
+        })
+
         return {
-            "recommendations": rec_result.get("recommendations", []),
+            "recommendations": recommendations,
             "recommendation_confidence": rec_result.get("confidence", 0.0),
             "reasoning_steps": [
-                f"Generated {len(rec_result.get('recommendations', []))} recommendations "
+                f"Generated {len(recommendations)} recommendations "
                 f"with confidence {rec_result.get('confidence', 0.0):.2f}"
             ]
         }
 
-    def _validation_node(self, state: OrchestratorState) -> Dict[str, Any]:
+    async def _validation_node(self, state: OrchestratorState) -> Dict[str, Any]:
         """Validate recommendations."""
         recommendations = state["recommendations"]
         diagnosis = state["diagnosis"]
@@ -371,25 +613,45 @@ IMPORTANT: The current date is {current_date} (year {current_year}). All date re
 
         logger.info("Validating recommendations", count=len(recommendations))
 
+        # Emit progress: started
+        await self._emit_progress("validation", "started", {"message": "Validating recommendations..."})
+
         # Use validation agent
         validation_result = validation_agent.validate_recommendations(
             recommendations, diagnosis, agent_results
         )
 
+        validated = validation_result.get("validated_recommendations", [])
+        warnings = validation_result.get("warnings", [])
+
+        # Emit progress: completed
+        await self._emit_progress("validation", "completed", {
+            "message": f"Validated {len(validated)} recommendation(s)",
+            "validated_count": len(validated),
+            "warnings_count": len(warnings)
+        })
+
         return {
             "validation_result": validation_result,
-            "validated_recommendations": validation_result.get("validated_recommendations", []),
-            "validation_warnings": validation_result.get("warnings", []),
+            "validated_recommendations": validated,
+            "validation_warnings": warnings,
             "reasoning_steps": [
-                f"Validation: {len(validation_result.get('validated_recommendations', []))} "
-                f"recommendations validated, {len(validation_result.get('warnings', []))} warnings"
+                f"Validation: {len(validated)} "
+                f"recommendations validated, {len(warnings)} warnings"
             ]
         }
 
-    def _generate_response_node(self, state: OrchestratorState) -> Dict[str, Any]:
+    async def _generate_response_node(self, state: OrchestratorState) -> Dict[str, Any]:
         """Generate final response."""
+        # Emit progress: started
+        await self._emit_progress("generate_response", "started", {"message": "Formatting response..."})
+
+        # Check if clarification is needed
+        if state.get("clarification_needed", False):
+            final_response = state.get("clarification_message", "Could you please clarify your question?")
+            confidence = 0.0
         # Check if early exit
-        if state.get("should_exit_early"):
+        elif state.get("should_exit_early"):
             final_response = state.get("final_response", "")
             confidence = 0.8
         else:
@@ -404,6 +666,12 @@ IMPORTANT: The current date is {current_date} (year {current_year}). All date re
                 confidence = state.get("recommendation_confidence", 0.8)
 
         logger.info("Generated final response", length=len(final_response), confidence=confidence)
+
+        # Emit progress: completed
+        await self._emit_progress("generate_response", "completed", {
+            "message": "Response ready",
+            "confidence": confidence
+        })
 
         return {
             "final_response": final_response,
@@ -420,29 +688,56 @@ IMPORTANT: The current date is {current_date} (year {current_year}). All date re
         parts.append(f"# Analysis Results\n")
         parts.append(f"**Query**: {query}\n")
 
-        # Diagnosis summary
-        diagnosis = state.get("diagnosis", {})
-        if diagnosis:
-            parts.append(f"\n## Diagnosis")
-            parts.append(f"**Severity**: {diagnosis.get('severity', 'N/A').upper()}")
-            if diagnosis.get("summary"):
-                parts.append(f"\n{diagnosis['summary']}\n")
-
-            if diagnosis.get("root_causes"):
-                parts.append(f"\n**Root Causes**:")
-                for cause in diagnosis["root_causes"]:
-                    parts.append(f"- {cause}")
-
-        # Recommendations
+        # Check if we have good recommendations - prioritize them over diagnosis
         validated_recs = state.get("validated_recommendations", [])
-        if validated_recs:
+        diagnosis = state.get("diagnosis", {})
+        
+        # If we have recommendations, prioritize them and only show diagnosis if it's meaningful
+        if validated_recs and len(validated_recs) > 0:
+            # Show recommendations first (they're the actionable output)
             parts.append(f"\n## Recommendations")
             for i, rec in enumerate(validated_recs, 1):
                 priority = rec.get("priority", "medium").upper()
                 action = rec.get("action", "N/A")
                 reason = rec.get("reason", "N/A")
+                expected_impact = rec.get("expected_impact", "")
+                
                 parts.append(f"\n### {i}. [{priority}] {action}")
                 parts.append(f"**Why**: {reason}")
+                if expected_impact:
+                    parts.append(f"**Expected Impact**: {expected_impact}")
+            
+            # Only show diagnosis if it's meaningful (not from a follow-up query)
+            # Check if diagnosis summary is actually useful (not just analyzing the follow-up)
+            diagnosis_summary = diagnosis.get("summary", "")
+            if diagnosis and diagnosis_summary and len(diagnosis_summary) > 50:
+                # Check if diagnosis is analyzing a follow-up query (like "yes I do")
+                follow_up_phrases = ["yes i do", "yes", "no", "that one", "the first", "the second"]
+                is_follow_up = any(phrase in query.lower() for phrase in follow_up_phrases)
+                
+                # Only include diagnosis if it's not analyzing a follow-up
+                if not is_follow_up:
+                    parts.append(f"\n## Diagnosis")
+                    parts.append(f"**Severity**: {diagnosis.get('severity', 'N/A').upper()}")
+                    if diagnosis_summary:
+                        parts.append(f"\n{diagnosis_summary}\n")
+                    
+                    if diagnosis.get("root_causes"):
+                        parts.append(f"\n**Root Causes**:")
+                        for cause in diagnosis["root_causes"]:
+                            parts.append(f"- {cause}")
+        else:
+            # No recommendations - show diagnosis as primary content
+            if diagnosis:
+                parts.append(f"\n## Diagnosis")
+                parts.append(f"**Severity**: {diagnosis.get('severity', 'N/A').upper()}")
+                if diagnosis.get("summary"):
+                    parts.append(f"\n{diagnosis['summary']}\n")
+
+                if diagnosis.get("root_causes"):
+                    parts.append(f"\n**Root Causes**:")
+                    for cause in diagnosis["root_causes"]:
+                        parts.append(f"- {cause}")
 
         # Warnings
         validation_warnings = state.get("validation_warnings", [])
@@ -512,6 +807,98 @@ IMPORTANT: The current date is {current_date} (year {current_year}). All date re
                 confidence=0.0,
                 metadata={"execution_time_ms": execution_time_ms, "error": str(e)}
             )
+
+
+    async def _emit_progress(self, phase: str, status: str, details: Dict[str, Any] = None):
+        """Emit progress event if callback is set."""
+        if self._progress_callback:
+            elapsed_ms = int((time.time() - self._start_time) * 1000)
+            await self._progress_callback(phase, status, {
+                **(details or {}),
+                "elapsed_ms": elapsed_ms
+            })
+
+    async def invoke_with_progress(
+        self,
+        input_data: AgentInput,
+        on_progress: ProgressCallback
+    ) -> AgentOutput:
+        """
+        Invoke orchestrator with progress callbacks at each phase.
+
+        Args:
+            input_data: The agent input
+            on_progress: Async callback called with (phase, status, details)
+                        - phase: routing, gate, invoke_agents, diagnosis, recommendation, validation, generate_response
+                        - status: started, running, completed
+                        - details: dict with message and phase-specific data
+
+        Returns:
+            AgentOutput with the final response
+        """
+        self._start_time = time.time()
+        self._progress_callback = on_progress
+
+        try:
+            # Create initial state
+            initial_state = create_initial_orchestrator_state(
+                query=input_data.message,
+                session_id=input_data.session_id,
+                user_id=input_data.user_id
+            )
+
+            # Invoke graph (async because nodes are async)
+            from langchain_core.runnables import RunnableConfig
+
+            config = RunnableConfig(
+                tags=["orchestrator", "routeflow", "streaming"],
+                metadata={"agent_name": "orchestrator", "query": input_data.message[:100]}
+            )
+
+            logger.info("Invoking orchestrator graph with progress", query=input_data.message[:50])
+            final_state = await self.graph.ainvoke(initial_state, config=config)
+
+            execution_time_ms = int((time.time() - self._start_time) * 1000)
+
+            logger.info(
+                "Orchestrator with progress completed",
+                execution_time_ms=execution_time_ms,
+                confidence=final_state.get("confidence", 0.0)
+            )
+
+            return AgentOutput(
+                response=final_state["final_response"],
+                agent_name=self.agent_name,
+                reasoning="\n".join(final_state.get("reasoning_steps", [])),
+                tools_used=final_state.get("tools_used", []),
+                confidence=final_state.get("confidence", 0.0),
+                metadata={
+                    "execution_time_ms": execution_time_ms,
+                    "agents_invoked": list(final_state.get("agent_results", {}).keys()),
+                    "severity": final_state.get("severity_assessment", ""),
+                    "recommendations_count": len(final_state.get("validated_recommendations", [])),
+                    "routing_decision": final_state.get("routing_decision", {}),
+                    "diagnosis": final_state.get("diagnosis", {}),
+                    "recommendations": final_state.get("validated_recommendations", []),
+                    "gate_warnings": final_state.get("gate_result", {}).get("warnings", []),
+                }
+            )
+
+        except Exception as e:
+            logger.error("Orchestrator with progress failed", error_message=str(e))
+            execution_time_ms = int((time.time() - self._start_time) * 1000)
+
+            return AgentOutput(
+                response=f"I encountered an error processing your request: {str(e)}",
+                agent_name=self.agent_name,
+                reasoning=f"Error: {str(e)}",
+                tools_used=[],
+                confidence=0.0,
+                metadata={"execution_time_ms": execution_time_ms, "error": str(e)}
+            )
+
+        finally:
+            self._progress_callback = None
 
 
 # Global instance

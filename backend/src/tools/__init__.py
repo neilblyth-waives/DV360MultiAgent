@@ -18,7 +18,6 @@ from .memory_tools import (
 from .agent_tools import (
     ALL_TOOLS,
     AGENT_TOOL_REGISTRY,
-    get_tools_for_agent,
     get_performance_agent_tools,
     get_budget_agent_tools,
     get_audience_agent_tools,
@@ -43,7 +42,6 @@ __all__ = [
     "ALL_MEMORY_TOOLS",
     "AGENT_TOOL_REGISTRY",
     # Helper functions
-    "get_tools_for_agent",
     "get_performance_agent_tools",
     "get_budget_agent_tools",
     "get_audience_agent_tools",

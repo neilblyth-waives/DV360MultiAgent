@@ -56,15 +56,30 @@ class EarlyExitNode:
         # Check if there are issues
         issues = diagnosis.get("issues", [])
         root_causes = diagnosis.get("root_causes", [])
-
-        if not issues and not root_causes:
-            # No issues found - can exit early
-            logger.info("Exiting early - no issues found")
-            return {
-                "exit": True,
-                "reason": "No actionable issues found",
-                "final_response": self._build_no_issues_response(agent_results, query)
-            }
+        
+        # Check if diagnosis was skipped (indicated by empty root_causes/issues and low severity)
+        severity = diagnosis.get("severity", "medium")
+        diagnosis_summary = diagnosis.get("summary", "")
+        
+        # If diagnosis was skipped (single-agent informational query), always exit early
+        if not issues and not root_causes and severity == "low":
+            # Check if this looks like a skipped diagnosis (has agent response as summary)
+            if diagnosis_summary and len(diagnosis_summary) > 50:
+                # Likely skipped diagnosis - exit early with agent response
+                logger.info("Exiting early - diagnosis was skipped (single-agent informational query)")
+                return {
+                    "exit": True,
+                    "reason": "Informational query answered, no recommendations needed",
+                    "final_response": diagnosis_summary  # Use the agent response directly
+                }
+            else:
+                # No issues found - can exit early
+                logger.info("Exiting early - no issues found")
+                return {
+                    "exit": True,
+                    "reason": "No actionable issues found",
+                    "final_response": self._build_no_issues_response(agent_results, query)
+                }
 
         # Check if all metrics are within acceptable ranges
         # (This would require parsing agent responses for metrics)
